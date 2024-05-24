@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+
+{% block body %}
+  <div class="wrapper min-vh-100">
+    <aside class="navbar navbar-vertical navbar-expand-lg navbar-dark">
+      <div class="container-fluid">
+        <div class="collapse navbar-collapse" id="navbar-menu">
+          <ul class="navbar-nav pt-lg-3">
+            {% for resource in resources %}
+              {% if resource.type == 'link' %}
+                {% include 'components/link.html' %}
+              {% elif resource.type == 'model' %}
+                {% include 'components/model.html' %}
+              {% elif resource.type == 'dropdown' %}
+                {% include 'components/dropdown.html' %}
+              {% endif %}
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </aside>
+    <div class="page-wrapper min-vh-100">
+      <header class="navbar navbar-expand-md navbar-light d-none d-lg-flex d-print-none">
+        <div class="container-fluid">
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar-menu">
+            <span class="navbar-toggler-icon"></span>
+          </button>
+          <div class="navbar-nav flex-row order-md-last">
+            {% if request.app.login_provider %}
+              <div class="nav-item dropdown">
+                <a href="#" class="nav-link d-flex lh-1 text-reset p-0" data-bs-toggle="dropdown">
+                  <div class="d-none d-xl-block ps-2">
+                    <div>{{ request.state.admin.username }}</div>
+                  </div>
+                </a>
+                <div class="dropdown-menu dropdown-menu-end dropdown-menu-arrow">
+                  <a href="{{ request.app.admin_path }}{{ request.app.login_provider.logout_path }}" class="dropdown-item">
+                    Logout
+                  </a>
+                </div>
+              </div>
+            {% endif %}
+          </div>
+          <div></div>
+        </div>
+      </header>
+      <div class="page-body flex-grow-1">
+        <div class="container-fluid">
+          <div class="row row-deck row-cards">
+              {% block page_body %} {% endblock %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

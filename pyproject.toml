@@ -1,0 +1,36 @@
+[tool.ruff]
+    line-length = 120
+
+[tool.ruff.format]
+    quote-style = 'single'
+
+[tool.ruff.lint.isort]
+    combine-as-imports = true
+
+[tool.ruff.lint]
+    extend-select = ['I']
+
+[tool.pytest]
+    testpaths = ['tests']
+
+[tool.pytest.ini_options]
+    addopts = '--tb=native'
+    filterwarnings = [
+    'ignore::DeprecationWarning:fastapi_admin.resources*',  # Remove when fastapi-admin is updated
+    'ignore::DeprecationWarning:fastapi.applications.*',  # Remove when tortoise is updated
+]
+
+[tool.coverage.run]
+    source = ['app']
+    branch = true
+    omit = ['app/main.py']
+
+[tool.coverage.report]
+    precision = 2
+    exclude_lines = [
+        'pragma: no cover',
+        'def __repr__',
+        'def __str__',
+        'raise NotImplementedError',
+        'raise NotImplemented',
+    ]
