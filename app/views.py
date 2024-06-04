@@ -4,19 +4,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
-from app.pydantic_models import PydanticEndpoint, PydanticWebhook
+from app.db import get_session
+from app.pydantic_schema import PydanticEndpoint, PydanticWebhook
 from app.utils import app_logger
 
-from app.main import engine
 from app.sql_models import Endpoint, WebhookLog
 
 main_router = APIRouter()
 session = requests.Session()
-
-
-def get_db():
-    with Session(engine) as db:
-        yield db
 
 
 async def webhook_request(api_key: str, url: str, *, method: str = 'GET', data: dict = None) -> dict:
@@ -30,7 +25,7 @@ async def webhook_request(api_key: str, url: str, *, method: str = 'GET', data: 
 
 
 @main_router.post('/send-webhook/', name='Receive webhooks from TC and send them to the relevant endpoints')
-async def send_webhook(webhook_payload: PydanticWebhook, db: Session = Depends(get_db)):
+async def send_webhook(webhook_payload: PydanticWebhook, db: Session = Depends(get_session)):
     # Receive webhook payloads from TC and send them out to the relevant other endpoints
 
     # Get branch_id from payload. This will be wrong for now
@@ -57,7 +52,7 @@ async def send_webhook(webhook_payload: PydanticWebhook, db: Session = Depends(g
 
 
 @main_router.post('/create-update-endpoint/', name='Receive webhooks from TC and create or update endpoints in Chronos')
-async def create_update_endpoint(endpoint_dict: PydanticEndpoint, db: Session = Depends(get_db)):
+async def create_update_endpoint(endpoint_dict: PydanticEndpoint, db: Session = Depends(get_session)):
     # Receive a payload of data that describes an end point and either create or update that end point in Chronos
     try:
         endpoint = select(Endpoint).where(Endpoint.tc_id == endpoint_dict['tc_id']).one()
@@ -74,7 +69,7 @@ async def create_update_endpoint(endpoint_dict: PydanticEndpoint, db: Session = 
 
 @main_router.post('/delete-endpoint/', name='Receive webhooks from TC and delete endpoints in Chronos')
 async def delete_endpoint(
-    endpoint_id: int, db: Session = Depends(get_db)
+    endpoint_id: int, db: Session = Depends(get_session)
 ):  # Don't think this will be the best option. May need to store id in TC
     # Take integration id as an argument and delete the endpoint for that integration
     try:
@@ -87,7 +82,7 @@ async def delete_endpoint(
 
 
 @main_router.post('/get-logs/', name='Send logs from Chronos to TC')
-async def get_logs(endpoint_id: int, page: int = 1, db: Session = Depends(get_db)):
+async def get_logs(endpoint_id: int, page: int = 1, db: Session = Depends(get_session)):
     # Take integration id as an argument and return logs for that integration
     offset = (page - 1) * 50
     statement = (

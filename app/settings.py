@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union, Any
+from pydantic import PostgresDsn, field_validator, ValidationInfo, Field, RedisDsn
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from pydantic import Field, PostgresDsn, RedisDsn
-from pydantic_settings import BaseSettings
 
 THIS_DIR = Path(__file__).parent.resolve()
 
@@ -10,16 +10,17 @@ THIS_DIR = Path(__file__).parent.resolve()
 class Settings(BaseSettings):
     # Dev and Test settings
     testing: bool = False
-    dev_mode: bool = False
+    dev_mode: bool = True
     log_level: str = 'INFO'
 
     logfire_token: Optional[str] = None
 
     # Postgres
-    pg_dsn: PostgresDsn = Field('postgres://postgres@localhost:5432/hermes', validation_alias='DATABASE_URL')
+    # pg_dsn: PostgresDsn = Field('postgres://postgres@localhost:5432/chronos', validation_alias='DATABASE_URL')
+    pg_dsn: str = 'postgresql://postgres@localhost:5432/chronos'
 
-    # Redis
-    redis_dsn: RedisDsn = Field('redis://localhost:6379', validation_alias='REDISCLOUD_URL')
+    # # Redis
+    # redis_dsn: RedisDsn = Field('redis://localhost:6379', validation_alias='REDISCLOUD_URL')
 
     # Sentry
     sentry_dsn: Optional[str] = None

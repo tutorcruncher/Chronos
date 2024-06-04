@@ -6,21 +6,17 @@ import sentry_sdk
 from fastapi import FastAPI
 from logfire import PydanticPlugin
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from sqlmodel import create_engine
 from starlette.middleware.cors import CORSMiddleware
 
 from app.logging import config
-from app.settings import Settings
 from app.views import main_router
+from app.utils import settings as _app_settings
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-_app_settings = Settings()
 if _app_settings.sentry_dsn:
     sentry_sdk.init(
         dsn=_app_settings.sentry_dsn,
     )
-
-engine = create_engine(_app_settings.pg_dsn)
 
 
 app = FastAPI()

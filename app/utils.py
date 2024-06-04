@@ -1,12 +1,11 @@
 import hashlib
 import logging
 
-import aioredis
-
 from app.settings import Settings
 
+
 settings = Settings()
-app_logger = logging.getapp_logger('base')
+app_logger = logging.getLogger('base')
 
 
 async def sign_args(*args):
@@ -19,7 +18,3 @@ def get_bearer(auth: str):
         return auth.split(' ')[1]
     except (AttributeError, IndexError):
         return
-
-
-async def get_redis_client() -> 'aioredis.Redis':
-    return aioredis.from_url(str(settings.redis_dsn))
