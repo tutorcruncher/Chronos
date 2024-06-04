@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Optional
 
 from pydantic import Field, PostgresDsn, RedisDsn
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 
 THIS_DIR = Path(__file__).parent.resolve()
 

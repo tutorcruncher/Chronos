@@ -4,22 +4,15 @@ import os
 import logfire
 import sentry_sdk
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi_admin.app import app as admin_app
 from logfire import PydanticPlugin
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from sqlmodel import create_engine
 from starlette.middleware.cors import CORSMiddleware
-from tortoise.contrib.fastapi import register_tortoise
 
 from app.admin import resources, views  # noqa: F401
-from app.admin.auth import AuthProvider
-from app.base_schema import build_custom_field_schema
-from app.callbooker.views import cb_router
-from app.views import main_router
 from app.logging import config
-from app.pipedrive.views import pipedrive_router
 from app.settings import Settings
-from app.tc2.views import tc2_router
+from app.views import main_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _app_settings = Settings()
@@ -27,6 +20,9 @@ if _app_settings.sentry_dsn:
     sentry_sdk.init(
         dsn=_app_settings.sentry_dsn,
     )
+
+engine = create_engine(_app_settings.pg_dsn)
+
 
 app = FastAPI()
 
