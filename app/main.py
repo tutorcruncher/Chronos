@@ -9,7 +9,6 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from sqlmodel import create_engine
 from starlette.middleware.cors import CORSMiddleware
 
-from app.admin import resources, views  # noqa: F401
 from app.logging import config
 from app.settings import Settings
 from app.views import main_router
