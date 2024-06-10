@@ -14,7 +14,15 @@ main_router = APIRouter()
 session = requests.Session()
 
 
-async def webhook_request(api_key: str, url: str, *, method: str = 'GET', data: dict = None) -> dict:
+async def webhook_request(api_key: str, url: str, *, method: str = 'POST', data: dict = None) -> dict:
+    """
+    Send a request to TutorCruncher
+    :param api_key: Supplied by TutorCruncher2 when creating an integration
+    :param url: The endpoint supplied by clients when creating an integration in TC2
+    :param method: We should always be sending POST requests as we are sending data to the endpoints
+    :param data: The Webhook data supplied by TC2
+    :return: Endpoint response
+    """
     headers = {'Authorization': f'token {api_key}', 'Content-Type': 'application/json'}
     logfire.debug('TutorCruncher request to url: {url=}: {data=}', url=url, data=data)
     with logfire.span('{method} {url!r}', url=url, method=method):
@@ -25,9 +33,13 @@ async def webhook_request(api_key: str, url: str, *, method: str = 'GET', data: 
 
 
 @main_router.post('/send-webhook/', name='Receive webhooks from TC and send them to the relevant endpoints')
-async def send_webhook(webhook_payload: PydanticWebhook, db: Session = Depends(get_session)):
-    # Receive webhook payloads from TC and send them out to the relevant other endpoints
-
+async def send_webhook(webhook_payload: PydanticWebhook, db: Session = Depends(get_session)) -> dict:
+    """
+    Receive webhook payloads from TC and send them out to the relevant other endpoints
+    :param webhook_payload: PydanticWebhook object, the payload from TC2 using pydantic validation to create the WebhookLog object
+    :param db: Session object for the database
+    :return: A confirmation dict?
+    """
     # Get branch_id from payload. This will be wrong for now
     branch_id = webhook_payload.branch_id
     endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
@@ -52,25 +64,35 @@ async def send_webhook(webhook_payload: PydanticWebhook, db: Session = Depends(g
 
 
 @main_router.post('/create-update-endpoint/', name='Receive webhooks from TC and create or update endpoints in Chronos')
-async def create_update_endpoint(endpoint_dict: PydanticEndpoint, db: Session = Depends(get_session)):
-    # Receive a payload of data that describes an end point and either create or update that end point in Chronos
+async def create_update_endpoint(endpoint_info: PydanticEndpoint, db: Session = Depends(get_session)):
+    """
+    Receive a payload of data that describes an end point and either create or update that end point in Chronos
+    :param endpoint_info: PydanticEndpoint object, the payload from TC2 using pydantic validation to create the Endpoint object
+    :param db: Session object for the database
+    :return:
+    """
     try:
-        endpoint = select(Endpoint).where(Endpoint.tc_id == endpoint_dict['tc_id']).one()
+        endpoint = select(Endpoint).where(Endpoint.tc_id == endpoint_info['tc_id']).one()
     except NoResultFound:
-        endpoint = Endpoint(**endpoint_dict.dict())
+        endpoint = Endpoint(**endpoint_info.dict())
         db.add(endpoint)
         db.commit()
         return {'message': f'Endpoint {endpoint.name}{endpoint.tc_id} created'}
     else:
-        endpoint.sqlmodel_update(endpoint_dict)
+        endpoint.sqlmodel_update(endpoint_info)
         db.commit()
         return {'message': f'Endpoint {endpoint.name}{endpoint.tc_id} updated'}
 
 
 @main_router.post('/delete-endpoint/', name='Receive webhooks from TC and delete endpoints in Chronos')
-async def delete_endpoint(
-    endpoint_id: int, db: Session = Depends(get_session)
-):  # Don't think this will be the best option. May need to store id in TC
+async def delete_endpoint(endpoint_id: int, db: Session = Depends(get_session)):
+    """
+    Receive a payload of data that describes an end point and delete that end point in Chronos
+    :param endpoint_id: The id of the endpoint to be deleted
+    :param db: Session object for the database
+    :return:
+    """
+    # Don't think this will be the best option. May need to store id in TC
     # Take integration id as an argument and delete the endpoint for that integration
     try:
         endpoint = db.get(Endpoint, endpoint_id)
@@ -86,7 +108,11 @@ async def get_logs(endpoint_id: int, page: int = 1, db: Session = Depends(get_se
     # Take integration id as an argument and return logs for that integration
     offset = (page - 1) * 50
     statement = (
-        select(WebhookLog).order_by(WebhookLog.created_at.desc()).offset(offset).limit(50)
+        select(WebhookLog)
+        .where(endpoint_id == endpoint_id)
+        .order_by(WebhookLog.created_at.desc())
+        .offset(offset)
+        .limit(50)
     )  # need to work out ordering
     results = db.exec(statement)
     logs = results.all()

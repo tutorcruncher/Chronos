@@ -13,5 +13,5 @@ def init_db():
 
 
 def get_session():
-    with Session(engine) as session:
-        yield session
+    with Session(engine) as db:
+        yield db
