@@ -1,3 +1,6 @@
+# Need to import the models to be able to create them in the DB
+import app.sql_models  # noqa: F401
+
 from sqlmodel import create_engine, SQLModel, Session
 from app.utils import settings
 

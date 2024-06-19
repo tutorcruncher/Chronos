@@ -72,7 +72,8 @@ async def create_update_endpoint(endpoint_info: PydanticEndpoint, db: Session = 
     :return:
     """
     try:
-        endpoint = select(Endpoint).where(Endpoint.tc_id == endpoint_info['tc_id']).one()
+        endpoint_qs = select(Endpoint).where(Endpoint.tc_id == endpoint_info.tc_id)
+        endpoint = db.exec(endpoint_qs).one()
     except NoResultFound:
         endpoint = Endpoint(**endpoint_info.dict())
         db.add(endpoint)
@@ -84,18 +85,17 @@ async def create_update_endpoint(endpoint_info: PydanticEndpoint, db: Session = 
         return {'message': f'Endpoint {endpoint.name}{endpoint.tc_id} updated'}
 
 
-@main_router.post('/delete-endpoint/', name='Receive webhooks from TC and delete endpoints in Chronos')
+@main_router.post('/delete-endpoint/{endpoint_id}/', name='Receive webhooks from TC and delete endpoints in Chronos')
 async def delete_endpoint(endpoint_id: int, db: Session = Depends(get_session)):
     """
     Receive a payload of data that describes an end point and delete that end point in Chronos
-    :param endpoint_id: The id of the endpoint to be deleted
+    :param endpoint_id: The id in TC of the endpoint (TC: Integration) to be deleted
     :param db: Session object for the database
     :return:
     """
-    # Don't think this will be the best option. May need to store id in TC
-    # Take integration id as an argument and delete the endpoint for that integration
     try:
-        endpoint = db.get(Endpoint, endpoint_id)
+        endpoint_qs = select(Endpoint).where(Endpoint.tc_id == endpoint_id)
+        endpoint = db.exec(endpoint_qs).one()
     except NoResultFound as e:
         return {'message': f'Endpoint {endpoint_id} not found: {e}'}
     db.delete(endpoint)
