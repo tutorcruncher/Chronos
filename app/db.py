@@ -5,10 +5,7 @@ from sqlmodel import create_engine, SQLModel, Session
 from app.utils import settings
 
 
-if settings.dev_mode:
-    engine = create_engine(settings.pg_dsn, echo=True)
-else:
-    engine = create_engine(settings.pg_dsn)
+engine = create_engine(settings.pg_dsn, echo=settings.dev_mode)
 
 
 def init_db():

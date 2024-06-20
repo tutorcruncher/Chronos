@@ -20,12 +20,13 @@ class Settings(BaseSettings):
     pg_dsn: str = 'postgresql://postgres@localhost:5432/chronos'
 
     # # Redis
-    # redis_dsn: RedisDsn = Field('redis://localhost:6379', validation_alias='REDISCLOUD_URL')
+    # redis_dsn: RedisDsn = Field('redis://localhost:6399', validation_alias='REDISCLOUD_URL')
+    redis_url: RedisDsn = 'redis://localhost:6399'
 
     # Sentry
     sentry_dsn: Optional[str] = None
 
     dft_timezone: str = 'Europe/London'
-    signing_key: str = 'test-key'
+    tc2_shared_key: str = 'test-key'
     host: str = '0.0.0.0'
     port: int = 8000

@@ -1,6 +1,7 @@
 import datetime
 from typing import Optional
 
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 
@@ -20,10 +21,10 @@ class Endpoint(SQLModel, table=True):
 
 class WebhookLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    request_headers: str
-    request_body: str
-    response_headers: str
-    response_body: str
+    request_headers: Optional[dict] = Field(nullable=True, sa_type=JSONB)
+    request_body: Optional[dict] = Field(nullable=True, sa_type=JSONB)
+    response_headers: Optional[dict] = Field(nullable=True, sa_type=JSONB)
+    response_body: Optional[dict] = Field(nullable=True, sa_type=JSONB)
     status: str
     status_code: Optional[int]
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)

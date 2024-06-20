@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 
-class PydanticEndpoint(BaseModel):
+class TCIntegration(BaseModel):
     tc_id: int
     name: str
     branch_id: int
@@ -10,6 +10,10 @@ class PydanticEndpoint(BaseModel):
     active: bool
 
 
-class PydanticWebhook(BaseModel):
-    request_headers: str
-    request_body: str
+class TCEvent(BaseModel):
+    action: str
+
+
+class TCWebhook(BaseModel):
+    events: list[TCEvent]
+    _request_time: int
