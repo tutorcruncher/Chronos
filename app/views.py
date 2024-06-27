@@ -91,5 +91,16 @@ async def get_logs(endpoint_id: int, page: int = 1, db: Session = Depends(get_se
     results = db.exec(statement)
     logs = results.all()
 
-    # TODO: Send logs to TC as dicts/JSON dump
-    return logs
+    list_of_webhooks = [
+        {
+            'request_headers': log.request_headers,
+            'request_body': log.request_body,
+            'response_headers': log.response_headers,
+            'response_body': log.response_body,
+            'status': log.status,
+            'status_code': log.status_code,
+            'timestamp': log.timestamp,
+        }
+        for log in logs
+    ]
+    return list_of_webhooks

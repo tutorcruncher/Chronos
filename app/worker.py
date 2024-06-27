@@ -1,15 +1,19 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta
 
 import requests
+
+from app.sql_models import WebhookLog, Endpoint
+
+from datetime import datetime, timedelta
+
 from sqlmodel import Session, select
 
 from app.db import engine
-from app.sql_models import WebhookLog, Endpoint
-from app.utils import app_logger, settings
+from app.utils import app_logger
 
+from fastapi_utilities import repeat_at
 
 from celery.app import Celery
 
@@ -72,14 +76,21 @@ def send_webhooks(loaded_payload: dict):
         db.commit()
 
 
-@celery_app.task
-async def delete_old_logs():
+@repeat_at(cron='0 0 * * *')
+async def delete_old_logs_job():
     """
     We run cron job at midnight every day that wipes all WebhookLogs older than 15 days
     """
+    _delete_old_logs_job.delay()
+
+
+@celery_app.task
+async def _delete_old_logs_job():
     with Session(engine) as db:
         statement = select(WebhookLog).where(
             WebhookLog.timestamp >= datetime.utcnow() - timedelta(days=15)
         )  # need to work out ordering
         results = db.exec(statement)
+        # Need to check how to get count here
+        debug(results)
         app_logger.info(f'Deleting {results.count()} logs')
