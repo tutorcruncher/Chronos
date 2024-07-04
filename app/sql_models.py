@@ -32,4 +32,4 @@ class WebhookLog(SQLModel, table=True):
     endpoint_id: int | None = Field(default=None, foreign_key='endpoint.id')
 
     def __repr__(self):
-        return f'WebhookLog(id={self.id}, payload={self.payload}, created_at={self.created_at})'
+        return f'WebhookLog(id={self.id}, payload={self.request_body}, created_at={self.timestamp})'

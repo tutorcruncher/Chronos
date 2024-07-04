@@ -5,6 +5,7 @@ import json
 import requests
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.exc import NoResultFound
+from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 from app.db import get_session
 from app.pydantic_schema import TCIntegration
@@ -30,8 +31,6 @@ async def send_webhook(request: Request) -> dict:
     assert m.hexdigest() == request.headers['Webhook-Signature']
 
     json_payload = json.loads(webhook_payload)
-    debug(json_payload)
-    debug(type(json_payload))
     send_webhooks.delay(json_payload)
     # return {'message': f'{total_success} webhooks sent to branch {branch_id}. {total_failed} failed.'}
     return {'message': 'ree'}
@@ -77,14 +76,17 @@ async def delete_endpoint(endpoint_id: int, db: Session = Depends(get_session)):
     return {'message': f'Endpoint {endpoint.name}{endpoint_id} deleted'}
 
 
-@main_router.post('/get-logs/', name='Send logs from Chronos to TC')
+@main_router.get('/get-logs/{endpoint_id}/{page}/', name='Send logs from Chronos to TC')
 async def get_logs(endpoint_id: int, page: int = 1, db: Session = Depends(get_session)):
     # Take integration id as an argument and return logs for that integration
-    offset = (page - 1) * 50
+
+    endpoint = db.exec(select(Endpoint).where(Endpoint.tc_id == endpoint_id)).one()
+
+    offset = (page) * 50
     statement = (
-        select(WebhookLog)
-        .where(endpoint_id == endpoint_id)
-        .order_by(WebhookLog.created_at.desc())
+        select(WebhookLog, Endpoint)
+        .where(WebhookLog.endpoint_id == endpoint.id, WebhookLog.endpoint_id == Endpoint.id)
+        .order_by(WebhookLog.timestamp.desc())
         .offset(offset)
         .limit(50)
     )  # need to work out ordering
@@ -93,14 +95,15 @@ async def get_logs(endpoint_id: int, page: int = 1, db: Session = Depends(get_se
 
     list_of_webhooks = [
         {
-            'request_headers': log.request_headers,
-            'request_body': log.request_body,
-            'response_headers': log.response_headers,
-            'response_body': log.response_body,
+            'request_headers': json.loads(log.request_headers),
+            'request_body': json.loads(log.request_body),
+            'response_headers': json.loads(log.response_headers),
+            'response_body': json.loads(log.response_body),
             'status': log.status,
             'status_code': log.status_code,
             'timestamp': log.timestamp,
+            'url': endpoint.webhook_url,
         }
-        for log in logs
+        for log, endpoint in logs
     ]
-    return list_of_webhooks
+    return {'logs': list_of_webhooks, 'count': len(list_of_webhooks)}
