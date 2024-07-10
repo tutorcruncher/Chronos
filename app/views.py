@@ -26,6 +26,8 @@ async def send_webhook(request: Request) -> dict:
     :param db: Session object for the database
     :return: A confirmation dict?
     """
+    debug(request.body())
+    debug(request.headers())
     webhook_payload = await request.body()
     m = hmac.new(settings.tc2_shared_key.encode(), webhook_payload, hashlib.sha256)
     assert m.hexdigest() == request.headers['Webhook-Signature']
@@ -48,32 +50,32 @@ async def create_update_endpoint(endpoint_info: TCIntegration, db: Session = Dep
         endpoint_qs = select(Endpoint).where(Endpoint.tc_id == endpoint_info.tc_id)
         endpoint = db.exec(endpoint_qs).one()
     except NoResultFound:
-        endpoint = Endpoint(**endpoint_info.dict())
+        endpoint = Endpoint(**endpoint_info.model_dump())
         db.add(endpoint)
         db.commit()
-        return {'message': f'Endpoint {endpoint.name}{endpoint.tc_id} created'}
+        return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) created'}
     else:
         endpoint.sqlmodel_update(endpoint_info)
         db.commit()
-        return {'message': f'Endpoint {endpoint.name}{endpoint.tc_id} updated'}
+        return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) updated'}
 
 
-@main_router.post('/delete-endpoint/{endpoint_id}/', name='Receive webhooks from TC and delete endpoints in Chronos')
-async def delete_endpoint(endpoint_id: int, db: Session = Depends(get_session)):
+@main_router.post('/delete-endpoint/{endpoint_tc_id}/', name='Receive webhooks from TC and delete endpoints in Chronos')
+async def delete_endpoint(endpoint_tc_id: int, db: Session = Depends(get_session)):
     """
     Receive a payload of data that describes an end point and delete that end point in Chronos
-    :param endpoint_id: The id in TC of the endpoint (TC: Integration) to be deleted
+    :param endpoint_tc_id: The id in TC of the endpoint (TC: Integration) to be deleted
     :param db: Session object for the database
     :return:
     """
     try:
-        endpoint_qs = select(Endpoint).where(Endpoint.tc_id == endpoint_id)
+        endpoint_qs = select(Endpoint).where(Endpoint.tc_id == endpoint_tc_id)
         endpoint = db.exec(endpoint_qs).one()
     except NoResultFound as e:
-        return {'message': f'Endpoint {endpoint_id} not found: {e}'}
+        return {'message': f'Endpoint with TC ID: {endpoint_tc_id} not found: {e}'}
     db.delete(endpoint)
     db.commit()
-    return {'message': f'Endpoint {endpoint.name}{endpoint_id} deleted'}
+    return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) deleted'}
 
 
 @main_router.get('/get-logs/{endpoint_id}/{page}/', name='Send logs from Chronos to TC')

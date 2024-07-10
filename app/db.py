@@ -8,8 +8,8 @@ from app.utils import settings
 engine = create_engine(settings.pg_dsn, echo=settings.dev_mode)
 
 
-def init_db():
-    SQLModel.metadata.create_all(engine)
+def init_db(_engine=engine):
+    SQLModel.metadata.create_all(_engine)
 
 
 def get_session():

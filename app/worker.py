@@ -53,7 +53,6 @@ def send_webhooks(loaded_payload: dict):
 
         total_failed = 0
         total_success = 0
-        debug(endpoints)
         for endpoint in endpoints:
             webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
             sig_hex = webhook_sig.hexdigest()
