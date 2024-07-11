@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -10,10 +12,6 @@ class TCIntegration(BaseModel):
     active: bool
 
 
-class TCEvent(BaseModel):
-    action: str
-
-
 class TCWebhook(BaseModel):
-    events: list[TCEvent]
-    _request_time: int
+    events: list[dict[str, Any]]
+    request_time: int

@@ -1,12 +1,28 @@
+import json
+from copy import copy
+
 from sqlmodel import Session
 from fastapi.testclient import TestClient
 
+from app.main import app
+from tests.test_helpers import _get_headers
 
-def test_send_webhook(session: Session, client: TestClient):
+DFT_WEBHOOK_DATA_FROM_TC2 = {
+    'events': [{'branch': 99, 'event': 'test_event', 'data': {'test': 'data'}}],
+    'request_time': 1234567890,
+}
+send_webhook_url = app.url_path_for('send_webhook')
+
+
+def test_send_webhook_one(session: Session, client: TestClient):
     # receive webhook event
+    payload = copy(DFT_WEBHOOK_DATA_FROM_TC2)
+    headers = _get_headers(payload)
+    r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
+    assert r.status_code == 200
+    assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
     # send webhook event
     # assert response
-    pass
 
 
 def test_send_many_webhooks(session: Session, client: TestClient):

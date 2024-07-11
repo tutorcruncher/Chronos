@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 from copy import copy
 
@@ -8,6 +10,9 @@ from sqlmodel import Session
 from app.pydantic_schema import TCIntegration
 from app.sql_models import Endpoint
 
+from app.main import app
+from app.utils import settings
+from tests.test_helpers import _get_headers
 
 DFT_ENDPOINT_DATA_FROM_TC2 = {
     'tc_id': 1,
@@ -19,40 +24,48 @@ DFT_ENDPOINT_DATA_FROM_TC2 = {
 }
 
 
-def test_create_endpoint(session: Session, client: TestClient):
-    create_data = DFT_ENDPOINT_DATA_FROM_TC2
+create_update_url = app.url_path_for('create_update_endpoint')
 
+
+def test_create_endpoint(session: Session, client: TestClient):
+    payload = copy(DFT_ENDPOINT_DATA_FROM_TC2)
+    headers = _get_headers(payload)
     response = client.post(
-        '/create-update-endpoint/',
-        data=json.dumps(create_data),
+        create_update_url,
+        data=json.dumps(payload),
+        headers=headers,
     )
     assert response.status_code == 200
     assert response.json() == {'message': f'Endpoint test_endpoint (TC ID: 1) created'}
 
 
 def test_update_endpoint(session: Session, client: TestClient):
-    endpoint_info = copy(DFT_ENDPOINT_DATA_FROM_TC2)
-    ep = Endpoint(**TCIntegration(**endpoint_info).model_dump())
+    payload = copy(DFT_ENDPOINT_DATA_FROM_TC2)
+    ep = Endpoint(**TCIntegration(**payload).model_dump())
     session.add(ep)
     session.commit()
 
-    endpoint_info['name'] = 'diff name'
+    payload['name'] = 'diff name'
 
+    headers = _get_headers(payload)
     response = client.post(
-        '/create-update-endpoint/',
-        data=json.dumps(endpoint_info),
+        create_update_url,
+        data=json.dumps(payload),
+        headers=headers,
     )
     assert response.status_code == 200
     assert response.json() == {'message': f'Endpoint diff name (TC ID: 1) updated'}
 
 
 def test_update_endpoint_invalid_data(session: Session, client: TestClient):
-    endpoint_info = copy(DFT_ENDPOINT_DATA_FROM_TC2)
-    endpoint_info['active'] = 50
+    payload = copy(DFT_ENDPOINT_DATA_FROM_TC2)
+    payload['active'] = 50
 
+    headers = _get_headers(payload)
     response = client.post(
-        '/create-update-endpoint/',
-        data=json.dumps(endpoint_info),
+        create_update_url,
+        data=json.dumps(payload),
+        headers=headers,
     )
     assert response.status_code == 422
     assert response.json()['detail'][0]['msg'] == 'Input should be a valid boolean, unable to interpret input'
@@ -63,28 +76,26 @@ def test_delete_endpoint(session: Session, client: TestClient):
     session.add(ep)
     session.commit()
 
-    response = client.post(
-        f'/delete-endpoint/{DFT_ENDPOINT_DATA_FROM_TC2["tc_id"]}',
-    )
+    tc_id = DFT_ENDPOINT_DATA_FROM_TC2['tc_id']
+    url = app.url_path_for('delete_endpoint', endpoint_tc_id=tc_id)
+    response = client.post(url)
     assert response.status_code == 200
-    assert response.json() == {
-        'message': f'Endpoint {DFT_ENDPOINT_DATA_FROM_TC2["name"]} (TC ID: {DFT_ENDPOINT_DATA_FROM_TC2["tc_id"]}) deleted'
-    }
+    assert response.json() == {'message': f'Endpoint {DFT_ENDPOINT_DATA_FROM_TC2["name"]} (TC ID: {tc_id}) deleted'}
 
 
 def test_delete_endpoint_doesnt_exist(session: Session, client: TestClient):
-    response = client.post(
-        f'/delete-endpoint/{DFT_ENDPOINT_DATA_FROM_TC2["tc_id"]}',
-    )
+    tc_id = DFT_ENDPOINT_DATA_FROM_TC2['tc_id']
+    url = app.url_path_for('delete_endpoint', endpoint_tc_id=tc_id)
+    response = client.post(url)
     assert response.status_code == 200
     assert response.json() == {
-        'message': f'Endpoint with TC ID: {DFT_ENDPOINT_DATA_FROM_TC2["tc_id"]} not found: No row was found when one was required'
+        'message': f'Endpoint with TC ID: {tc_id} not found: No row was found when one was required'
     }
 
 
 def test_delete_endpoint_invalid_data(session: Session, client: TestClient):
     response = client.post(
-        f'/delete-endpoint/invalid_string',
+        '/delete-endpoint/invalid_string/',
     )
     assert response.status_code == 422
     assert (
