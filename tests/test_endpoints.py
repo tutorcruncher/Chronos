@@ -1,29 +1,16 @@
 import json
-from copy import copy
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.main import app
-from app.pydantic_schema import TCIntegration
-from app.sql_models import Endpoint
-from tests.test_helpers import _get_headers
-
-DFT_ENDPOINT_DATA_FROM_TC2 = {
-    'tc_id': 1,
-    'name': 'test_endpoint',
-    'branch_id': 99,
-    'webhook_url': 'test.com',
-    'api_key': 'test',
-    'active': True,
-}
-
+from tests.test_helpers import _get_headers, get_dft_endpoint_data, create_endpoint_from_dft_data
 
 create_update_url = app.url_path_for('create_update_endpoint')
 
 
 def test_create_endpoint(session: Session, client: TestClient):
-    payload = copy(DFT_ENDPOINT_DATA_FROM_TC2)
+    payload = get_dft_endpoint_data()
     headers = _get_headers(payload)
     response = client.post(
         create_update_url,
@@ -31,17 +18,15 @@ def test_create_endpoint(session: Session, client: TestClient):
         headers=headers,
     )
     assert response.status_code == 200
-    assert response.json() == {'message': 'Endpoint test_endpoint (TC ID: 1) created'}
+    assert response.json() == {'message': f'Endpoint test_endpoint (TC ID: {payload["tc_id"]}) created'}
 
 
-def test_update_endpoint(session: Session, client: TestClient):
-    payload = copy(DFT_ENDPOINT_DATA_FROM_TC2)
-    ep = Endpoint(**TCIntegration(**payload).model_dump())
+def test_update_endpoint_correct_data(session: Session, client: TestClient):
+    ep = create_endpoint_from_dft_data()
     session.add(ep)
     session.commit()
 
-    payload['name'] = 'diff name'
-
+    payload = get_dft_endpoint_data(name='diff name')
     headers = _get_headers(payload)
     response = client.post(
         create_update_url,
@@ -49,12 +34,11 @@ def test_update_endpoint(session: Session, client: TestClient):
         headers=headers,
     )
     assert response.status_code == 200
-    assert response.json() == {'message': 'Endpoint diff name (TC ID: 1) updated'}
+    assert response.json() == {'message': f'Endpoint diff name (TC ID: {payload["tc_id"]}) updated'}
 
 
 def test_update_endpoint_invalid_data(session: Session, client: TestClient):
-    payload = copy(DFT_ENDPOINT_DATA_FROM_TC2)
-    payload['active'] = 50
+    payload = get_dft_endpoint_data(active=50)
 
     headers = _get_headers(payload)
     response = client.post(
@@ -67,19 +51,20 @@ def test_update_endpoint_invalid_data(session: Session, client: TestClient):
 
 
 def test_delete_endpoint(session: Session, client: TestClient):
-    ep = Endpoint(**TCIntegration(**DFT_ENDPOINT_DATA_FROM_TC2).model_dump())
+    payload = get_dft_endpoint_data()
+    ep = create_endpoint_from_dft_data()
     session.add(ep)
     session.commit()
 
-    tc_id = DFT_ENDPOINT_DATA_FROM_TC2['tc_id']
+    tc_id = payload['tc_id']
     url = app.url_path_for('delete_endpoint', endpoint_tc_id=tc_id)
     response = client.post(url)
     assert response.status_code == 200
-    assert response.json() == {'message': f'Endpoint {DFT_ENDPOINT_DATA_FROM_TC2["name"]} (TC ID: {tc_id}) deleted'}
+    assert response.json() == {'message': f'Endpoint {payload["name"]} (TC ID: {tc_id}) deleted'}
 
 
 def test_delete_endpoint_doesnt_exist(session: Session, client: TestClient):
-    tc_id = DFT_ENDPOINT_DATA_FROM_TC2['tc_id']
+    tc_id = get_dft_endpoint_data()['tc_id']
     url = app.url_path_for('delete_endpoint', endpoint_tc_id=tc_id)
     response = client.post(url)
     assert response.status_code == 200

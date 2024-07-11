@@ -5,10 +5,11 @@ from datetime import datetime, timedelta
 
 import requests
 from celery.app import Celery
+from fastapi import Depends
 from fastapi_utilities import repeat_at
 from sqlmodel import Session, select
 
-from app.db import engine
+from app.db import engine, get_session
 from app.sql_models import Endpoint, WebhookLog
 from app.utils import app_logger
 
@@ -39,36 +40,48 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
 
 
 @celery_app.task
-def send_webhooks(loaded_payload: dict):
-    with Session(engine) as db:
-        branch_id = loaded_payload['events'][0]['branch']
+def send_webhooks(
+    loaded_payload: dict,
+    db: Session,
+):
+    branch_id = loaded_payload['events'][0]['branch']
 
-        endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
-        endpoints = db.exec(endpoints_query).all()
+    endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
+    endpoints = db.exec(endpoints_query).all()
 
-        total_failed = 0
-        total_success = 0
-        for endpoint in endpoints:
-            webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
-            sig_hex = webhook_sig.hexdigest()
-            response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=loaded_payload)
-            if response.status_code in {200, 201, 202, 204}:
-                status = 'Success'
-                total_success += 1
-            else:
-                status = 'Unexpected response'
-                total_failed += 1
-            webhooklog = WebhookLog(
-                endpoint_id=endpoint.id,
-                request_headers=json.dumps(dict(response.request.headers)),
-                request_body=json.dumps((response.request.body.decode())),
-                response_headers=json.dumps(dict(response.headers)),
-                response_body=json.dumps(response.content.decode()),
-                status=status,
-                status_code=response.status_code,
-            )
-            db.add(webhooklog)
-        db.commit()
+    total_failed = 0
+    total_success = 0
+    for endpoint in endpoints:
+        webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
+        sig_hex = webhook_sig.hexdigest()
+        response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=loaded_payload)
+        if response.status_code in {200, 201, 202, 204}:
+            status = 'Success'
+            total_success += 1
+        else:
+            status = 'Unexpected response'
+            total_failed += 1
+        webhooklog = WebhookLog(
+            endpoint_id=endpoint.id,
+            request_headers=json.dumps(dict(response.request.headers)),
+            request_body=json.dumps((response.request.body.decode())),
+            response_headers=json.dumps(dict(response.headers)),
+            response_body=json.dumps(response.content.decode()),
+            status=status,
+            status_code=response.status_code,
+        )
+        db.add(webhooklog)
+    db.commit()
+    webhooks = db.exec(select(WebhookLog)).all()
+    debug(webhooks)
+    debug(len(webhooks))
+    app_logger.info(
+        '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
+        total_success + total_failed,
+        branch_id,
+        total_success,
+        total_failed,
+    )
 
 
 @repeat_at(cron='0 0 * * *')
@@ -87,4 +100,4 @@ async def _delete_old_logs_job():
         )  # need to work out ordering
         results = db.exec(statement)
         # Need to check how to get count here
-        app_logger.info(f'Deleting {results.count()} logs')
+        app_logger.info(f'Deleting {len(results)} logs')

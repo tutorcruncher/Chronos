@@ -21,8 +21,7 @@ if _app_settings.sentry_dsn:
 
 app = FastAPI()
 
-allowed_origins = ['*']
-# allowed_origins = ['https://secure.tutorcruncher.com']
+allowed_origins = ['https://secure.tutorcruncher.com']
 if _app_settings.dev_mode:
     allowed_origins = ['*']
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=['*'], allow_headers=['*'])
@@ -43,23 +42,3 @@ app.include_router(main_router, prefix='')
 COMMIT = os.getenv('HEROKU_SLUG_COMMIT', '-')[:7]
 RELEASE_CREATED_AT = os.getenv('HEROKU_RELEASE_CREATED_AT', '-')
 # logfire.info('starting app {commit=} {release_created_at=}', commit=COMMIT, release_created_at=RELEASE_CREATED_AT)
-
-
-# @app.on_event('startup')
-# async def _startup():
-#     pass
-# from app.models import Admin
-# from app.utils import get_redis_client
-#
-# await admin_app.configure(
-#     template_folders=[os.path.join(BASE_DIR, 'admin/templates/')],
-#     providers=[AuthProvider(Admin)],
-#     language_switch=False,
-#     redis=await get_redis_client(),
-#     admin_path='',
-#     favicon_url='/assets/favicon.ico',
-# )
-# from app.utils import get_config
-#
-# await get_config()
-# await build_custom_field_schema()
