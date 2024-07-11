@@ -9,8 +9,8 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from starlette.middleware.cors import CORSMiddleware
 
 from app.logging import config
-from app.views import main_router
 from app.utils import settings as _app_settings
+from app.views import main_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if _app_settings.sentry_dsn:

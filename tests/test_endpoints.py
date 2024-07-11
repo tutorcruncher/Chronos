@@ -1,17 +1,12 @@
-import hashlib
-import hmac
 import json
 from copy import copy
 
 from fastapi.testclient import TestClient
-
 from sqlmodel import Session
 
+from app.main import app
 from app.pydantic_schema import TCIntegration
 from app.sql_models import Endpoint
-
-from app.main import app
-from app.utils import settings
 from tests.test_helpers import _get_headers
 
 DFT_ENDPOINT_DATA_FROM_TC2 = {
@@ -36,7 +31,7 @@ def test_create_endpoint(session: Session, client: TestClient):
         headers=headers,
     )
     assert response.status_code == 200
-    assert response.json() == {'message': f'Endpoint test_endpoint (TC ID: 1) created'}
+    assert response.json() == {'message': 'Endpoint test_endpoint (TC ID: 1) created'}
 
 
 def test_update_endpoint(session: Session, client: TestClient):
@@ -54,7 +49,7 @@ def test_update_endpoint(session: Session, client: TestClient):
         headers=headers,
     )
     assert response.status_code == 200
-    assert response.json() == {'message': f'Endpoint diff name (TC ID: 1) updated'}
+    assert response.json() == {'message': 'Endpoint diff name (TC ID: 1) updated'}
 
 
 def test_update_endpoint_invalid_data(session: Session, client: TestClient):

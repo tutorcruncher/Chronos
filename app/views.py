@@ -4,15 +4,15 @@ import json
 from typing import Annotated
 
 import requests
-from fastapi import APIRouter, Depends, Request, Header
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
+
 from app.db import get_session
 from app.pydantic_schema import TCIntegration, TCWebhook
-from app.utils import settings
-
-from app.worker import send_webhooks
 from app.sql_models import Endpoint, WebhookLog
+from app.utils import settings
+from app.worker import send_webhooks
 
 main_router = APIRouter()
 session = requests.Session()

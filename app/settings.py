@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Optional, Union, Any
-from pydantic import PostgresDsn, field_validator, ValidationInfo, Field, RedisDsn
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
+from pydantic import RedisDsn
+from pydantic_settings import BaseSettings
 
 THIS_DIR = Path(__file__).parent.resolve()
 

@@ -1,8 +1,6 @@
-import hashlib
 import logging
 
 from app.settings import Settings
-
 
 settings = Settings()
 app_logger = logging.getLogger('base')
