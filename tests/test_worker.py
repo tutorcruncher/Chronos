@@ -5,14 +5,14 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select, col
 
 from app.sql_models import WebhookLog, Endpoint
-from app.worker import send_webhooks
+from app.worker import send_webhooks, delete_old_logs_job, _delete_old_logs_job
 from tests.test_helpers import (
     _get_headers,
     get_dft_webhook_data,
     create_endpoint_from_dft_data,
     get_successful_response,
     get_failed_response,
-    create_log_from_dft_data,
+    create_webhook_log_from_dft_data,
 )
 
 
@@ -166,8 +166,8 @@ def test_delete_old_logs(session: Session, client: TestClient):
     session.add(ep)
     session.commit()
 
-    for i in range(1, 30):
-        whl = create_log_from_dft_data(
+    for i in range(1, 31):
+        whl = create_webhook_log_from_dft_data(
             endpoint_id=ep.id,
             timestamp=datetime.now() - timedelta(days=i),
         )
@@ -175,4 +175,14 @@ def test_delete_old_logs(session: Session, client: TestClient):
     session.commit()
 
     logs = session.exec(select(WebhookLog)).all()
-    # TODO REEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE (Finish test)
+    assert len(logs) == 30
+
+    # with patch('app.worker._delete_old_logs_job.delay') as mock_task:
+    #     debug(1)
+    #     await delete_old_logs_job()
+    #     debug(2)
+    #     assert mock_task.called
+
+    _delete_old_logs_job(session)
+    logs = session.exec(select(WebhookLog)).all()
+    assert len(logs) == 15

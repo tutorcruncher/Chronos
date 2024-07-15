@@ -33,6 +33,26 @@ def get_dft_webhook_data(branch_id: int = None, **kwargs) -> dict:
     return webhook_dict
 
 
+def get_dft_webhook_log_data(branch_id: int = None, endpoint_id: int = None, **kwargs) -> dict:
+    branch_id = branch_id or 99
+    webhook_log_dict = {
+        'request_headers': {'User-Agent': 'TutorCruncher', 'Content-Type': 'application/json'},
+        'request_body': {
+            'events': [{'branch': branch_id, 'event': 'test_event', 'data': {'test': 'data'}}],
+            'request_time': 1234567890,
+        },
+        'response_headers': {'User-Agent': 'TutorCruncher', 'Content-Type': 'application/json'},
+        'response_body': {'status_code': 200, 'message': 'success'},
+        'status': 'Success',
+        'status_code': 200,
+        'timestamp': 1234567890,
+        'endpoint_id': endpoint_id or 1,
+    }
+    for k, v in kwargs.items():
+        webhook_log_dict[k] = v
+    return webhook_log_dict
+
+
 def _get_headers(data: dict) -> dict:
     json_payload = json.dumps(data).encode()
     webhook_signature = hmac.new(settings.tc2_shared_key.encode(), json_payload, hashlib.sha256)
@@ -43,14 +63,14 @@ def _get_headers(data: dict) -> dict:
     }
 
 
-def create_log_from_dft_data(**kwargs) -> WebhookLog:
-    webhook_data = get_dft_webhook_data(**kwargs)
-    return WebhookLog(**webhook_data)
-
-
 def create_endpoint_from_dft_data(**kwargs) -> Endpoint:
     webhook_data = get_dft_endpoint_data(**kwargs)
     return Endpoint(**webhook_data)
+
+
+def create_webhook_log_from_dft_data(**kwargs) -> WebhookLog:
+    webhook_data = get_dft_webhook_log_data(**kwargs)
+    return WebhookLog(**webhook_data)
 
 
 def get_successful_response(payload, headers, **kwargs) -> Response:
