@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timezone, timedelta, datetime
 from unittest.mock import patch
 
@@ -176,12 +177,6 @@ def test_delete_old_logs(session: Session, client: TestClient):
 
     logs = session.exec(select(WebhookLog)).all()
     assert len(logs) == 30
-
-    # with patch('app.worker._delete_old_logs_job.delay') as mock_task:
-    #     debug(1)
-    #     await delete_old_logs_job()
-    #     debug(2)
-    #     assert mock_task.called
 
     _delete_old_logs_job(session)
     logs = session.exec(select(WebhookLog)).all()

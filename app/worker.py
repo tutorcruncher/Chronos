@@ -42,50 +42,51 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
 
 @celery_app.task
 def send_webhooks(
-    loaded_payload: dict,
-    db: Session,
+    payload: str,
 ):
-    branch_id = loaded_payload['events'][0]['branch']
+    with Session(engine) as db:
+        loaded_payload = json.loads(payload)
+        branch_id = loaded_payload['events'][0]['branch']
 
-    endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
-    endpoints = db.exec(endpoints_query).all()
+        endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
+        endpoints = db.exec(endpoints_query).all()
 
-    total_failed = 0
-    total_success = 0
-    for endpoint in endpoints:
-        webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
-        sig_hex = webhook_sig.hexdigest()
-        response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=loaded_payload)
-        if response.status_code in {200, 201, 202, 204}:
-            status = 'Success'
-            total_success += 1
-        else:
-            status = 'Unexpected response'
-            total_failed += 1
-        webhooklog = WebhookLog(
-            endpoint_id=endpoint.id,
-            request_headers=json.dumps(dict(response.request.headers)),
-            request_body=json.dumps((response.request.body.decode())),
-            response_headers=json.dumps(dict(response.headers)),
-            response_body=json.dumps(response.content.decode()),
-            status=status,
-            status_code=response.status_code,
+        total_failed = 0
+        total_success = 0
+        for endpoint in endpoints:
+            webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
+            sig_hex = webhook_sig.hexdigest()
+            response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=loaded_payload)
+            if response.status_code in {200, 201, 202, 204}:
+                status = 'Success'
+                total_success += 1
+            else:
+                status = 'Unexpected response'
+                total_failed += 1
+            webhooklog = WebhookLog(
+                endpoint_id=endpoint.id,
+                request_headers=json.dumps(dict(response.request.headers)),
+                request_body=json.dumps((response.request.body.decode())),
+                response_headers=json.dumps(dict(response.headers)),
+                response_body=json.dumps(response.content.decode()),
+                status=status,
+                status_code=response.status_code,
+            )
+            db.add(webhooklog)
+        db.commit()
+        webhooks = db.exec(select(WebhookLog)).all()
+        debug(webhooks)
+        debug(len(webhooks))
+        app_logger.info(
+            '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
+            total_success + total_failed,
+            branch_id,
+            total_success,
+            total_failed,
         )
-        db.add(webhooklog)
-    db.commit()
-    webhooks = db.exec(select(WebhookLog)).all()
-    debug(webhooks)
-    debug(len(webhooks))
-    app_logger.info(
-        '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
-        total_success + total_failed,
-        branch_id,
-        total_success,
-        total_failed,
-    )
 
 
-# @repeat_at(cron='0 0 * * *')
+@repeat_at(cron='0 0 * * *')
 async def delete_old_logs_job():
     """
     We run cron job at midnight every day that wipes all WebhookLogs older than 15 days

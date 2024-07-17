@@ -36,13 +36,15 @@ def get_dft_webhook_data(branch_id: int = None, **kwargs) -> dict:
 def get_dft_webhook_log_data(branch_id: int = None, endpoint_id: int = None, **kwargs) -> dict:
     branch_id = branch_id or 99
     webhook_log_dict = {
-        'request_headers': {'User-Agent': 'TutorCruncher', 'Content-Type': 'application/json'},
-        'request_body': {
-            'events': [{'branch': branch_id, 'event': 'test_event', 'data': {'test': 'data'}}],
-            'request_time': 1234567890,
-        },
-        'response_headers': {'User-Agent': 'TutorCruncher', 'Content-Type': 'application/json'},
-        'response_body': {'status_code': 200, 'message': 'success'},
+        'request_headers': json.dumps({'User-Agent': 'TutorCruncher', 'Content-Type': 'application/json'}),
+        'request_body': json.dumps(
+            {
+                'events': [{'branch': branch_id, 'event': 'test_event', 'data': {'test': 'data'}}],
+                'request_time': 1234567890,
+            }
+        ),
+        'response_headers': json.dumps({'User-Agent': 'TutorCruncher', 'Content-Type': 'application/json'}),
+        'response_body': json.dumps({'status_code': 200, 'message': 'success'}),
         'status': 'Success',
         'status_code': 200,
         'timestamp': 1234567890,
