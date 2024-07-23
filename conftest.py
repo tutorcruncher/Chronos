@@ -1,14 +1,11 @@
 import pytest
-from sqlalchemy import NullPool
-from sqlmodel.pool import StaticPool
 from sqlmodel import Session, create_engine, SQLModel
 from fastapi.testclient import TestClient
 import chronos.sql_models  # noqa: F401
 
-from chronos.db import init_db, get_session, get_engine
+from chronos.db import get_session
 from chronos.main import app
 from chronos.utils import settings
-from chronos.worker import celery_app as cel_app
 
 
 pytest_plugins = ('celery.contrib.pytest',)
