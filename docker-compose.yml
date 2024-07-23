@@ -3,7 +3,7 @@ version: '3.11'
 services:
 
   web:
-    build: ./app
+    build: chronos
     ports:
       - 8004:8000
     command: uvicorn main:app --host 0.0.0.0 --reload
@@ -14,7 +14,7 @@ services:
       - redis
 
   worker:
-    build: ./app
+    build: chronos
     command: celery -A worker.celery worker --loglevel=info
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0

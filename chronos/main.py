@@ -8,9 +8,9 @@ from logfire import PydanticPlugin
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from starlette.middleware.cors import CORSMiddleware
 
-from app.logging import config
-from app.utils import settings as _app_settings
-from app.views import main_router
+from chronos.logging import config
+from chronos.utils import settings as _app_settings
+from chronos.views import main_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if _app_settings.sentry_dsn:

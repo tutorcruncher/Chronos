@@ -1,4 +1,4 @@
-from app.utils import settings
+from chronos.utils import settings
 
 logging_level = settings.log_level
 

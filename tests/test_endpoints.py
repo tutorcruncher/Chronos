@@ -3,7 +3,7 @@ import json
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.main import app
+from chronos.main import app
 from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,

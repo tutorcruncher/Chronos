@@ -9,9 +9,9 @@ from fastapi_utilities import repeat_at
 from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
-from app.db import engine, get_session
-from app.sql_models import Endpoint, WebhookLog
-from app.utils import app_logger
+from chronos.db import engine, get_session
+from chronos.sql_models import Endpoint, WebhookLog
+from chronos.utils import app_logger
 
 session = requests.Session()
 

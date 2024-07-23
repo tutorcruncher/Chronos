@@ -6,9 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
-from app.main import app
-from app.sql_models import Endpoint, WebhookLog
-from app.worker import _delete_old_logs_job, send_webhooks
+from chronos.main import app
+from chronos.sql_models import Endpoint, WebhookLog
+from chronos.worker import _delete_old_logs_job, send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
@@ -33,7 +33,7 @@ class TestWorkers:
         with Session(engine) as session:
             yield session
 
-    @patch('app.worker.session.request')
+    @patch('chronos.worker.session.request')
     def test_send_webhook_one(self, mock_response, db: Session, client: TestClient, celery_session_worker):
         ep = create_endpoint_from_dft_data()
         db.add(ep)
@@ -59,7 +59,7 @@ class TestWorkers:
         assert webhook.status == 'Success'
         assert webhook.status_code == 200
 
-    @patch('app.worker.session.request')
+    @patch('chronos.worker.session.request')
     def test_send_many_endpoints(self, mock_response, db: Session, client: TestClient, celery_session_worker):
         endpoints = db.exec(select(Endpoint)).all()
         assert len(endpoints) == 0
@@ -84,7 +84,7 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
 
-    @patch('app.worker.session.request')
+    @patch('chronos.worker.session.request')
     def test_send_correct_branch(self, mock_response, db: Session, client: TestClient, celery_session_worker):
         endpoints = db.exec(select(Endpoint)).all()
         assert len(endpoints) == 0
@@ -161,7 +161,7 @@ class TestWorkers:
         ).all()
         assert len(webhooks) == 0
 
-    @patch('app.worker.session.request')
+    @patch('chronos.worker.session.request')
     def test_send_webhook_fail_to_send_only_one(
         self, mock_response, db: Session, client: TestClient, celery_session_worker
     ):

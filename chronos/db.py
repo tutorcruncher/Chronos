@@ -1,8 +1,8 @@
 # Need to import the models to be able to create them in the DB
 from sqlmodel import Session, SQLModel, create_engine
 
-import app.sql_models  # noqa: F401
-from app.utils import settings
+import chronos.sql_models  # noqa: F401
+from chronos.utils import settings
 
 
 def get_engine():

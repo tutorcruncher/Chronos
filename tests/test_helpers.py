@@ -4,8 +4,8 @@ import json
 
 from requests import Request, Response
 
-from app.sql_models import Endpoint, WebhookLog
-from app.utils import settings
+from chronos.sql_models import Endpoint, WebhookLog
+from chronos.utils import settings
 
 
 def get_dft_endpoint_data(**kwargs) -> dict:

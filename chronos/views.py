@@ -9,11 +9,11 @@ from sqlalchemy import func
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
-from app.db import get_session
-from app.pydantic_schema import TCIntegration, TCWebhook
-from app.sql_models import Endpoint, WebhookLog
-from app.utils import settings
-from app.worker import send_webhooks
+from chronos.db import get_session
+from chronos.pydantic_schema import TCIntegration, TCWebhook
+from chronos.sql_models import Endpoint, WebhookLog
+from chronos.utils import settings
+from chronos.worker import send_webhooks
 
 main_router = APIRouter()
 session = requests.Session()
