@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 from app.main import app
 from app.sql_models import WebhookLog
 from tests.test_helpers import (
-    _get_headers,
+    _get_webhook_headers,
     get_dft_webhook_data,
     create_endpoint_from_dft_data,
     create_webhook_log_from_dft_data,
@@ -21,7 +21,7 @@ send_webhook_url = app.url_path_for('send_webhook')
 
 def test_send_webhooks(session: Session, client: TestClient):
     payload = get_dft_webhook_data()
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
 
     with patch('app.worker.send_webhooks.delay') as mock_task:
         r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
@@ -32,7 +32,7 @@ def test_send_webhooks(session: Session, client: TestClient):
 
 def test_send_webhook_bad_request(session: Session, client: TestClient):
     payload = get_dft_webhook_data(request_time='I am a string')
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
 
     with patch('app.worker.send_webhooks.delay') as mock_task:
         r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)

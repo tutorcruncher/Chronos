@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import timezone, timedelta, datetime
 from unittest.mock import patch
 
@@ -8,7 +9,7 @@ from sqlmodel import Session, select, col
 from app.sql_models import WebhookLog, Endpoint
 from app.worker import send_webhooks, delete_old_logs_job, _delete_old_logs_job
 from tests.test_helpers import (
-    _get_headers,
+    _get_webhook_headers,
     get_dft_webhook_data,
     create_endpoint_from_dft_data,
     get_successful_response,
@@ -24,13 +25,13 @@ def test_send_webhook_one(mock_response, session: Session, client: TestClient):
     session.commit()
 
     payload = get_dft_webhook_data()
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
     mock_response.return_value = get_successful_response(payload, headers)
 
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 0
 
-    send_webhooks(payload, session)
+    send_webhooks(json.dumps(payload))
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 1
 
@@ -53,13 +54,13 @@ def test_send_many_endpoints(mock_response, session: Session, client: TestClient
     assert len(endpoints) == 10
 
     payload = get_dft_webhook_data()
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
     mock_response.return_value = get_successful_response(payload, headers)
 
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 0
 
-    send_webhooks(payload, session)
+    send_webhooks(json.dumps(payload))
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 10
 
@@ -91,13 +92,13 @@ def test_send_correct_branch(mock_response, session: Session, client: TestClient
     assert len(endpoints_3) == 5
 
     payload = get_dft_webhook_data()
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
     mock_response.return_value = get_successful_response(payload, headers)
 
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 0
 
-    send_webhooks(payload, session)
+    send_webhooks(json.dumps(payload))
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 5
 
@@ -117,10 +118,10 @@ def test_send_correct_branch(mock_response, session: Session, client: TestClient
     assert len(webhooks) == 0
 
     payload = get_dft_webhook_data(branch_id=199)
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
     mock_response.return_value = get_successful_response(payload, headers)
 
-    send_webhooks(payload, session)
+    send_webhooks(json.dumps(payload))
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 10
 
@@ -147,13 +148,13 @@ def test_send_webhook_fail_to_send_only_one(mock_response, session: Session, cli
     session.commit()
 
     payload = get_dft_webhook_data()
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
     mock_response.return_value = get_failed_response(payload, headers)
 
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 0
 
-    send_webhooks(payload, session)
+    send_webhooks(json.dumps(payload))
     webhooks = session.exec(select(WebhookLog)).all()
     assert len(webhooks) == 1
 

@@ -10,7 +10,7 @@ from fastapi_utilities import repeat_at
 from sqlmodel import Session, select, col
 from sqlalchemy import delete
 
-from app.db import engine, get_session
+from app.db import get_session, engine
 from app.sql_models import Endpoint, WebhookLog
 from app.utils import app_logger
 
@@ -53,6 +53,7 @@ def send_webhooks(
 
         total_failed = 0
         total_success = 0
+        debug(endpoints)
         for endpoint in endpoints:
             webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
             sig_hex = webhook_sig.hexdigest()

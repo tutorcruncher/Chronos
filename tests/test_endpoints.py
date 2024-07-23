@@ -4,14 +4,18 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.main import app
-from tests.test_helpers import _get_headers, get_dft_endpoint_data, create_endpoint_from_dft_data
+from tests.test_helpers import (
+    _get_webhook_headers,
+    get_dft_endpoint_data,
+    create_endpoint_from_dft_data,
+)
 
 create_update_url = app.url_path_for('create_update_endpoint')
 
 
 def test_create_endpoint(session: Session, client: TestClient):
     payload = get_dft_endpoint_data()
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
     response = client.post(
         create_update_url,
         data=json.dumps(payload),
@@ -27,7 +31,7 @@ def test_update_endpoint_correct_data(session: Session, client: TestClient):
     session.commit()
 
     payload = get_dft_endpoint_data(name='diff name')
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
     response = client.post(
         create_update_url,
         data=json.dumps(payload),
@@ -40,7 +44,7 @@ def test_update_endpoint_correct_data(session: Session, client: TestClient):
 def test_update_endpoint_invalid_data(session: Session, client: TestClient):
     payload = get_dft_endpoint_data(active=50)
 
-    headers = _get_headers(payload)
+    headers = _get_webhook_headers(payload)
     response = client.post(
         create_update_url,
         data=json.dumps(payload),
