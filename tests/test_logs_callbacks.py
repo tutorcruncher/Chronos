@@ -1,7 +1,5 @@
 import json
-from copy import copy
 from datetime import datetime, timedelta
-from unittest import mock
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -11,9 +9,9 @@ from app.main import app
 from app.sql_models import WebhookLog
 from tests.test_helpers import (
     _get_webhook_headers,
-    get_dft_webhook_data,
     create_endpoint_from_dft_data,
     create_webhook_log_from_dft_data,
+    get_dft_webhook_data,
 )
 
 send_webhook_url = app.url_path_for('send_webhook')
@@ -56,7 +54,26 @@ def test_get_logs_none(session: Session, client: TestClient):
 
 
 def test_get_logs_one(session: Session, client: TestClient):
-    pass
+    ep = create_endpoint_from_dft_data()
+    session.add(ep)
+    session.commit()
+
+    whl = create_webhook_log_from_dft_data(
+        endpoint_id=ep.id,
+        timestamp=datetime.now(),
+    )
+    session.add(whl)
+    session.commit()
+
+    logs = session.exec(select(WebhookLog)).all()
+    assert len(logs) == 1
+
+    get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=0)
+
+    r = client.get(get_logs_url)
+    assert r.status_code == 200
+    assert len(r.json()['logs']) == 1
+    assert r.json()['count'] == 1
 
 
 def test_get_logs_many(session: Session, client: TestClient):
@@ -75,9 +92,23 @@ def test_get_logs_many(session: Session, client: TestClient):
     logs = session.exec(select(WebhookLog)).all()
     assert len(logs) == 100
 
+    get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=0)
+
+    r = client.get(get_logs_url)
+    assert r.status_code == 200
+    assert len(r.json()['logs']) == 50
+    assert r.json()['count'] == 100
+
     get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=1)
 
     r = client.get(get_logs_url)
     assert r.status_code == 200
     assert len(r.json()['logs']) == 50
+    assert r.json()['count'] == 100
+
+    get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=2)
+
+    r = client.get(get_logs_url)
+    assert r.status_code == 200
+    assert len(r.json()['logs']) == 0
     assert r.json()['count'] == 100

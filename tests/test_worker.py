@@ -1,184 +1,205 @@
-import asyncio
 import json
-from datetime import timezone, timedelta, datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select, col
+from sqlmodel import Session, SQLModel, col, select
 
-from app.sql_models import WebhookLog, Endpoint
-from app.worker import send_webhooks, delete_old_logs_job, _delete_old_logs_job
+from app.main import app
+from app.sql_models import Endpoint, WebhookLog
+from app.worker import _delete_old_logs_job, send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,
-    get_dft_webhook_data,
     create_endpoint_from_dft_data,
-    get_successful_response,
-    get_failed_response,
     create_webhook_log_from_dft_data,
+    get_dft_webhook_data,
+    get_failed_response,
+    get_successful_response,
 )
 
-
-@patch('app.worker.session.request')
-def test_send_webhook_one(mock_response, session: Session, client: TestClient):
-    ep = create_endpoint_from_dft_data()
-    session.add(ep)
-    session.commit()
-
-    payload = get_dft_webhook_data()
-    headers = _get_webhook_headers(payload)
-    mock_response.return_value = get_successful_response(payload, headers)
-
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 0
-
-    send_webhooks(json.dumps(payload))
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 1
-
-    webhook = webhooks[0]
-    assert webhook.status == 'Success'
-    assert webhook.status_code == 200
+send_webhook_url = app.url_path_for('send_webhook')
 
 
-@patch('app.worker.session.request')
-def test_send_many_endpoints(mock_response, session: Session, client: TestClient):
-    endpoints = session.exec(select(Endpoint)).all()
-    assert len(endpoints) == 0
+class TestWorkers:
+    @pytest.fixture
+    def create_tables(self, engine):
+        SQLModel.metadata.create_all(engine)
+        yield
+        SQLModel.metadata.drop_all(engine)
 
-    for tc_id in range(1, 11):
-        ep = create_endpoint_from_dft_data(tc_id=tc_id)
-        session.add(ep)
-    session.commit()
+    @pytest.fixture
+    def db(self, engine, create_tables):
+        with Session(engine) as session:
+            yield session
 
-    endpoints = session.exec(select(Endpoint)).all()
-    assert len(endpoints) == 10
+    @patch('app.worker.session.request')
+    def test_send_webhook_one(self, mock_response, db: Session, client: TestClient, celery_session_worker):
+        ep = create_endpoint_from_dft_data()
+        db.add(ep)
+        db.commit()
 
-    payload = get_dft_webhook_data()
-    headers = _get_webhook_headers(payload)
-    mock_response.return_value = get_successful_response(payload, headers)
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers(payload)
+        mock_response.return_value = get_successful_response(payload, headers)
 
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 0
+        endpoints = db.exec(select(Endpoint)).all()
+        assert len(endpoints) == 1
 
-    send_webhooks(json.dumps(payload))
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 10
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
 
+        sending_webhooks = send_webhooks.delay(json.dumps(payload))
+        sending_webhooks.get(timeout=10)
 
-@patch('app.worker.session.request')
-def test_send_correct_branch(mock_response, session: Session, client: TestClient):
-    endpoints = session.exec(select(Endpoint)).all()
-    assert len(endpoints) == 0
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
 
-    for tc_id in range(1, 6):
-        ep = create_endpoint_from_dft_data(tc_id=tc_id)
-        session.add(ep)
+        webhook = webhooks[0]
+        assert webhook.status == 'Success'
+        assert webhook.status_code == 200
 
-        ep = create_endpoint_from_dft_data(tc_id=tc_id + 10, branch_id=199)
-        session.add(ep)
+    @patch('app.worker.session.request')
+    def test_send_many_endpoints(self, mock_response, db: Session, client: TestClient, celery_session_worker):
+        endpoints = db.exec(select(Endpoint)).all()
+        assert len(endpoints) == 0
 
-        ep = create_endpoint_from_dft_data(tc_id=tc_id + 100, branch_id=299)
-        session.add(ep)
-    session.commit()
+        for tc_id in range(1, 11):
+            ep = create_endpoint_from_dft_data(tc_id=tc_id)
+            db.add(ep)
+        db.commit()
 
-    endpoints = session.exec(select(Endpoint)).all()
-    assert len(endpoints) == 15
+        endpoints = db.exec(select(Endpoint)).all()
+        assert len(endpoints) == 10
 
-    endpoints_1 = session.exec(select(Endpoint).where(Endpoint.branch_id == 99)).all()
-    assert len(endpoints_1) == 5
-    endpoints_2 = session.exec(select(Endpoint).where(Endpoint.branch_id == 199)).all()
-    assert len(endpoints_2) == 5
-    endpoints_3 = session.exec(select(Endpoint).where(Endpoint.branch_id == 299)).all()
-    assert len(endpoints_3) == 5
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
 
-    payload = get_dft_webhook_data()
-    headers = _get_webhook_headers(payload)
-    mock_response.return_value = get_successful_response(payload, headers)
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers(payload)
+        mock_response.return_value = get_successful_response(payload, headers)
 
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 0
+        sending_webhooks = send_webhooks.delay(json.dumps(payload))
+        sending_webhooks.get(timeout=10)
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 10
 
-    send_webhooks(json.dumps(payload))
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 5
+    @patch('app.worker.session.request')
+    def test_send_correct_branch(self, mock_response, db: Session, client: TestClient, celery_session_worker):
+        endpoints = db.exec(select(Endpoint)).all()
+        assert len(endpoints) == 0
 
-    webhooks = session.exec(
-        select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_1]))
-    ).all()
-    assert len(webhooks) == 5
+        for tc_id in range(1, 6):
+            ep = create_endpoint_from_dft_data(tc_id=tc_id)
+            db.add(ep)
 
-    webhooks = session.exec(
-        select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_2]))
-    ).all()
-    assert len(webhooks) == 0
+            ep = create_endpoint_from_dft_data(tc_id=tc_id + 10, branch_id=199)
+            db.add(ep)
 
-    webhooks = session.exec(
-        select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_3]))
-    ).all()
-    assert len(webhooks) == 0
+            ep = create_endpoint_from_dft_data(tc_id=tc_id + 100, branch_id=299)
+            db.add(ep)
+        db.commit()
 
-    payload = get_dft_webhook_data(branch_id=199)
-    headers = _get_webhook_headers(payload)
-    mock_response.return_value = get_successful_response(payload, headers)
+        endpoints = db.exec(select(Endpoint)).all()
+        assert len(endpoints) == 15
 
-    send_webhooks(json.dumps(payload))
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 10
+        endpoints_1 = db.exec(select(Endpoint).where(Endpoint.branch_id == 99)).all()
+        assert len(endpoints_1) == 5
+        endpoints_2 = db.exec(select(Endpoint).where(Endpoint.branch_id == 199)).all()
+        assert len(endpoints_2) == 5
+        endpoints_3 = db.exec(select(Endpoint).where(Endpoint.branch_id == 299)).all()
+        assert len(endpoints_3) == 5
 
-    webhooks = session.exec(
-        select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_1]))
-    ).all()
-    assert len(webhooks) == 5
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers(payload)
+        mock_response.return_value = get_successful_response(payload, headers)
 
-    webhooks = session.exec(
-        select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_2]))
-    ).all()
-    assert len(webhooks) == 5
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
 
-    webhooks = session.exec(
-        select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_3]))
-    ).all()
-    assert len(webhooks) == 0
+        sending_webhooks = send_webhooks.delay(json.dumps(payload))
+        sending_webhooks.get(timeout=10)
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 5
 
+        webhooks = db.exec(
+            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_1]))
+        ).all()
+        assert len(webhooks) == 5
 
-@patch('app.worker.session.request')
-def test_send_webhook_fail_to_send_only_one(mock_response, session: Session, client: TestClient):
-    ep = create_endpoint_from_dft_data()
-    session.add(ep)
-    session.commit()
+        webhooks = db.exec(
+            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_2]))
+        ).all()
+        assert len(webhooks) == 0
 
-    payload = get_dft_webhook_data()
-    headers = _get_webhook_headers(payload)
-    mock_response.return_value = get_failed_response(payload, headers)
+        webhooks = db.exec(
+            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_3]))
+        ).all()
+        assert len(webhooks) == 0
 
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 0
+        payload = get_dft_webhook_data(branch_id=199)
+        headers = _get_webhook_headers(payload)
+        mock_response.return_value = get_successful_response(payload, headers)
 
-    send_webhooks(json.dumps(payload))
-    webhooks = session.exec(select(WebhookLog)).all()
-    assert len(webhooks) == 1
+        sending_webhooks = send_webhooks.delay(json.dumps(payload))
+        sending_webhooks.get(timeout=10)
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 10
 
-    webhook = webhooks[0]
-    assert webhook.status == 'Unexpected response'
-    assert webhook.status_code == 409
+        webhooks = db.exec(
+            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_1]))
+        ).all()
+        assert len(webhooks) == 5
 
+        webhooks = db.exec(
+            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_2]))
+        ).all()
+        assert len(webhooks) == 5
 
-def test_delete_old_logs(session: Session, client: TestClient):
-    ep = create_endpoint_from_dft_data()
-    session.add(ep)
-    session.commit()
+        webhooks = db.exec(
+            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_3]))
+        ).all()
+        assert len(webhooks) == 0
 
-    for i in range(1, 31):
-        whl = create_webhook_log_from_dft_data(
-            endpoint_id=ep.id,
-            timestamp=datetime.now() - timedelta(days=i),
-        )
-        session.add(whl)
-    session.commit()
+    @patch('app.worker.session.request')
+    def test_send_webhook_fail_to_send_only_one(
+        self, mock_response, db: Session, client: TestClient, celery_session_worker
+    ):
+        ep = create_endpoint_from_dft_data()
+        db.add(ep)
+        db.commit()
 
-    logs = session.exec(select(WebhookLog)).all()
-    assert len(logs) == 30
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers(payload)
+        mock_response.return_value = get_failed_response(payload, headers)
 
-    _delete_old_logs_job(session)
-    logs = session.exec(select(WebhookLog)).all()
-    assert len(logs) == 15
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
+
+        send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+
+        webhook = webhooks[0]
+        assert webhook.status == 'Unexpected response'
+        assert webhook.status_code == 409
+
+    def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
+        ep = create_endpoint_from_dft_data()
+        db.add(ep)
+        db.commit()
+
+        for i in range(1, 31):
+            whl = create_webhook_log_from_dft_data(
+                endpoint_id=ep.id,
+                timestamp=datetime.now() - timedelta(days=i),
+            )
+            db.add(whl)
+        db.commit()
+
+        logs = db.exec(select(WebhookLog)).all()
+        assert len(logs) == 30
+
+        _delete_old_logs_job()
+        logs = db.exec(select(WebhookLog)).all()
+        assert len(logs) == 15

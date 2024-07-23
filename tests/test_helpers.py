@@ -2,9 +2,9 @@ import hashlib
 import hmac
 import json
 
-from requests import Response, Request
+from requests import Request, Response
 
-from app.sql_models import WebhookLog, Endpoint
+from app.sql_models import Endpoint, WebhookLog
 from app.utils import settings
 
 

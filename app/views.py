@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy import func
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
-import logging
+
 from app.db import get_session
 from app.pydantic_schema import TCIntegration, TCWebhook
 from app.sql_models import Endpoint, WebhookLog
@@ -107,12 +107,17 @@ async def delete_endpoint(endpoint_tc_id: int, db: Session = Depends(get_session
 
 
 @main_router.get('/get-logs/{endpoint_id}/{page}/', description='Send logs from Chronos to TC')
-async def get_logs(endpoint_id: int, page: int = 1, db: Session = Depends(get_session)):
+async def get_logs(endpoint_id: int, page: int = 0, db: Session = Depends(get_session)):
     # Use the api key here to authenticate the request
-
     endpoint = db.exec(select(Endpoint).where(Endpoint.tc_id == endpoint_id)).one()
 
-    offset = (page) * 50
+    count_stmt = select(func.count(WebhookLog.id)).where(WebhookLog.endpoint_id == endpoint.id)
+    count = db.exec(count_stmt).one()
+
+    offset = page * 50
+    if count < offset:
+        return {'logs': [], 'count': count}
+
     statement = (
         select(WebhookLog, Endpoint)
         .where(WebhookLog.endpoint_id == endpoint.id, WebhookLog.endpoint_id == Endpoint.id)
@@ -122,9 +127,6 @@ async def get_logs(endpoint_id: int, page: int = 1, db: Session = Depends(get_se
     )
     results = db.exec(statement)
     logs = results.all()
-
-    count_stmt = select(func.count(WebhookLog.id)).where(WebhookLog.endpoint_id == endpoint.id)
-    count = db.exec(count_stmt).one()
     list_of_webhooks = [
         {
             'request_headers': json.loads(log.request_headers),

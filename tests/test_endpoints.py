@@ -6,8 +6,8 @@ from sqlmodel import Session
 from app.main import app
 from tests.test_helpers import (
     _get_webhook_headers,
-    get_dft_endpoint_data,
     create_endpoint_from_dft_data,
+    get_dft_endpoint_data,
 )
 
 create_update_url = app.url_path_for('create_update_endpoint')

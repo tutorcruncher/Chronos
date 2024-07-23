@@ -5,12 +5,11 @@ from datetime import datetime, timedelta
 
 import requests
 from celery.app import Celery
-from fastapi import Depends
 from fastapi_utilities import repeat_at
-from sqlmodel import Session, select, col
 from sqlalchemy import delete
+from sqlmodel import Session, col, select
 
-from app.db import get_session, engine
+from app.db import engine, get_session
 from app.sql_models import Endpoint, WebhookLog
 from app.utils import app_logger
 
@@ -51,9 +50,7 @@ def send_webhooks(
         endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
         endpoints = db.exec(endpoints_query).all()
 
-        total_failed = 0
-        total_success = 0
-        debug(endpoints)
+        total_success, total_failed = 0, 0
         for endpoint in endpoints:
             webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
             sig_hex = webhook_sig.hexdigest()
@@ -75,9 +72,6 @@ def send_webhooks(
             )
             db.add(webhooklog)
         db.commit()
-        webhooks = db.exec(select(WebhookLog)).all()
-        debug(webhooks)
-        debug(len(webhooks))
         app_logger.info(
             '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
             total_success + total_failed,
@@ -96,14 +90,15 @@ async def delete_old_logs_job():
 
 
 @celery_app.task
-def _delete_old_logs_job(db: Session):
-    statement = select(WebhookLog).where(
-        WebhookLog.timestamp >= datetime.utcnow() - timedelta(days=15)
-    )  # need to work out ordering
-    results = db.exec(statement).all()
+def _delete_old_logs_job():
+    with Session(engine) as db:
+        statement = select(WebhookLog).where(
+            WebhookLog.timestamp >= datetime.utcnow() - timedelta(days=15)
+        )  # need to work out ordering
+        results = db.exec(statement).all()
 
-    delete_statement = delete(WebhookLog).where(col(WebhookLog.id).in_([whl.id for whl in results]))
-    db.exec(delete_statement)
-    db.commit()
-    # Need to check how to get count here
-    app_logger.info(f'Deleting {len(results)} logs')
+        delete_statement = delete(WebhookLog).where(col(WebhookLog.id).in_([whl.id for whl in results]))
+        db.exec(delete_statement)
+        db.commit()
+        # Need to check how to get count here
+        app_logger.info(f'Deleting {len(results)} logs')
