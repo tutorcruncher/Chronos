@@ -5,13 +5,13 @@ install:
 
 .PHONY: lint
 lint:
-	ruff check app/ tests/
-	ruff format app/ tests/ --check
+	ruff check chronos/ tests/
+	ruff format chronos/ tests/ --check
 
 .PHONY: format
 format:
-	ruff check app/ tests/ --fix
-	ruff format app/ tests/
+	ruff check chronos/ tests/ --fix
+	ruff format chronos/ tests/
 
 .PHONY: test
 test:
@@ -20,7 +20,7 @@ test:
 .PHONY: full-test
 full-test:
 	make reset-db
-	python -m app.scripts.create_db_tables
+	python -m chronos.scripts.create_db_tables
 	pytest
 
 .PHONY: reset-db
@@ -38,7 +38,7 @@ install-dev:
 
 .PHONY: run-server
 run-server:
-	python -m uvicorn app.main:app --reload --port=5000
+	python -m uvicorn chronos.main:app --reload --port=5000
 
 .PHONY: run-worker
 run-worker:
