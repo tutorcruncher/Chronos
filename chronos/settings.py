@@ -18,8 +18,8 @@ class Settings(BaseSettings):
 
     # Postgres
     # pg_dsn: PostgresDsn = Field('postgres://postgres@localhost:5432/chronos', validation_alias='DATABASE_URL')
-    pg_dsn: str = 'postgresql://postgres@localhost:5432/chronos'
-    test_pg_dsn: str = 'postgresql://postgres@localhost:5432/test_chronos'
+    pg_dsn: str = 'postgresql://postgres:postgres@localhost:5432/chronos'
+    test_pg_dsn: str = 'postgresql://postgres:postgres@localhost:5432/test_chronos'
 
     # # Redis
     # redis_dsn: RedisDsn = Field('redis://localhost:6399', validation_alias='REDISCLOUD_URL')

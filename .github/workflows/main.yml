@@ -17,17 +17,18 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: hermes_test
+          POSTGRES_DB: test_chronos
         ports:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
         image: redis
         ports:
-          - 6379:6379s
+          - 6379:6379
         options: --entrypoint redis-server
+
     env:
-      DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/chronos_test'
+      DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/test_chronos'
 
     steps:
     - uses: actions/checkout@v2
@@ -46,7 +47,6 @@ jobs:
 
     - name: test
       run: |
-        make reset-db
         make test
 
     - name: codecov

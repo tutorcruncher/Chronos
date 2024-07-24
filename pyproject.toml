@@ -15,15 +15,12 @@
 
 [tool.pytest.ini_options]
     addopts = '--tb=native'
-    filterwarnings = [
-    'ignore::DeprecationWarning:fastapi_admin.resources*',  # Remove when fastapi-admin is updated
-    'ignore::DeprecationWarning:fastapi.applications.*',  # Remove when tortoise is updated
-]
+    filterwarnings = []
 
 [tool.coverage.run]
-    source = ['app']
+    source = ['chronos']
     branch = true
-    omit = ['app/main.py']
+    omit = ['chronos/main.py']
 
 [tool.coverage.report]
     precision = 2

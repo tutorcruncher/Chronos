@@ -92,7 +92,7 @@ async def delete_old_logs_job():
 @celery_app.task
 def _delete_old_logs_job():
     with Session(engine) as db:
-        statement = select(WebhookLog).where(WebhookLog.timestamp >= datetime.utcnow() - timedelta(days=15))
+        statement = select(WebhookLog).where(WebhookLog.timestamp > datetime.utcnow() - timedelta(days=15))
         results = db.exec(statement).all()
 
         delete_statement = delete(WebhookLog).where(col(WebhookLog.id).in_([whl.id for whl in results]))

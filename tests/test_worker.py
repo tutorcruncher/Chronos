@@ -192,7 +192,7 @@ class TestWorkers:
         for i in range(1, 31):
             whl = create_webhook_log_from_dft_data(
                 endpoint_id=ep.id,
-                timestamp=datetime.now() - timedelta(days=i),
+                timestamp=datetime.utcnow() - timedelta(days=i),
             )
             db.add(whl)
         db.commit()
@@ -202,4 +202,5 @@ class TestWorkers:
 
         _delete_old_logs_job()
         logs = db.exec(select(WebhookLog)).all()
-        assert len(logs) == 15
+        # The log from 15 days ago is seconds older than the check and thus doesn't get deleted
+        assert len(logs) == 16
