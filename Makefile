@@ -15,13 +15,8 @@ format:
 
 .PHONY: test
 test:
-	pytest
+	pytest  --cov=chronos
 
-.PHONY: full-test
-full-test:
-	make reset-db
-	python -m chronos.scripts.create_db_tables
-	pytest
 
 .PHONY: reset-db
 reset-db:
@@ -33,7 +28,6 @@ reset-db:
 .PHONY: install-dev
 install-dev:
 	pip install -r requirements.txt
-	pip install -r tests/requirements.txt
 	pip install devtools
 
 .PHONY: run-server

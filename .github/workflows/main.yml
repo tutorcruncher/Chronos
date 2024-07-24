@@ -34,7 +34,9 @@ jobs:
       run: make lint
 
     - name: test
-      run: make test
+      run: |
+        make reset-db
+        make test
 
     - name: codecov
       run: bash <(curl -s https://codecov.io/bash)

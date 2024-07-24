@@ -6,8 +6,13 @@ logfire~=0.23.0
 starlette~=0.37.2
 SQLAlchemy~=2.0.30
 celery~=5.4.0
-pydantic~=2.7.1
+pydantic~=2.7.4
 ruff==0.4.5
 docker==7.1.0
 pydantic-settings==2.3.4
-pydantic_core==2.20.1
+pydantic-core==2.18.4
+psycopg2==2.9.9
+sentry-sdk==2.11.0
+opentelemetry-instrumentation-fastapi==0.46b0
+fastapi-utilities==0.2.0
+redis==5.0.7
