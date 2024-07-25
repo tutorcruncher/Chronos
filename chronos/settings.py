@@ -15,10 +15,11 @@ class Settings(BaseSettings):
     on_heroku: bool = False
 
     logfire_token: Optional[str] = None
+    logfire_ignore_no_config: int = 1
 
     # Postgres
-    pg_dsn: str = 'postgresql://postgres@localhost:5432/chronos'
-    test_pg_dsn: str = 'postgresql://postgres@localhost:5432/test_chronos'
+    pg_dsn: str = 'postgresql://postgres:postgres@localhost:5432/chronos'
+    test_pg_dsn: str = 'postgresql://postgres:postgres@localhost:5432/test_chronos'
 
     # Redis
     redis_url: RedisDsn = 'redis://localhost:6399'

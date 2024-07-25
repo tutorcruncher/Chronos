@@ -11,7 +11,9 @@ from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
     create_webhook_log_from_dft_data,
+    get_dft_get_log_data,
     get_dft_webhook_data,
+    get_logs_url,
 )
 
 send_webhook_url = app.url_path_for('send_webhook')
@@ -43,9 +45,14 @@ def test_get_logs_none(session: Session, client: TestClient):
     ep = create_endpoint_from_dft_data()
     session.add(ep)
     session.commit()
-    get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=1)
 
-    r = client.get(get_logs_url)
+    payload = get_dft_get_log_data()
+    headers = _get_webhook_headers(payload)
+    r = client.post(
+        get_logs_url,
+        data=json.dumps(payload),
+        headers=headers,
+    )
     assert r.status_code == 200
     assert r.json() == {
         'logs': [],
@@ -68,9 +75,13 @@ def test_get_logs_one(session: Session, client: TestClient):
     logs = session.exec(select(WebhookLog)).all()
     assert len(logs) == 1
 
-    get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=0)
-
-    r = client.get(get_logs_url)
+    payload = get_dft_get_log_data()
+    headers = _get_webhook_headers(payload)
+    r = client.post(
+        get_logs_url,
+        data=json.dumps(payload),
+        headers=headers,
+    )
     assert r.status_code == 200
     assert len(r.json()['logs']) == 1
     assert r.json()['count'] == 1
@@ -92,23 +103,35 @@ def test_get_logs_many(session: Session, client: TestClient):
     logs = session.exec(select(WebhookLog)).all()
     assert len(logs) == 100
 
-    get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=0)
-
-    r = client.get(get_logs_url)
+    payload = get_dft_get_log_data()
+    headers = _get_webhook_headers(payload)
+    r = client.post(
+        get_logs_url,
+        data=json.dumps(payload),
+        headers=headers,
+    )
     assert r.status_code == 200
     assert len(r.json()['logs']) == 50
     assert r.json()['count'] == 100
 
-    get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=1)
-
-    r = client.get(get_logs_url)
+    payload['page'] = 1
+    headers = _get_webhook_headers(payload)
+    r = client.post(
+        get_logs_url,
+        data=json.dumps(payload),
+        headers=headers,
+    )
     assert r.status_code == 200
     assert len(r.json()['logs']) == 50
     assert r.json()['count'] == 100
 
-    get_logs_url = app.url_path_for('get_logs', endpoint_id=ep.tc_id, page=2)
-
-    r = client.get(get_logs_url)
+    payload['page'] = 2
+    headers = _get_webhook_headers(payload)
+    r = client.post(
+        get_logs_url,
+        data=json.dumps(payload),
+        headers=headers,
+    )
     assert r.status_code == 200
     assert len(r.json()['logs']) == 0
     assert r.json()['count'] == 100

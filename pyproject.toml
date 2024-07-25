@@ -31,3 +31,7 @@
         'raise NotImplementedError',
         'raise NotImplemented',
     ]
+
+
+[tool.logfire]
+    ignore_no_config = true
