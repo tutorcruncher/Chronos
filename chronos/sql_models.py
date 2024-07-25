@@ -6,6 +6,10 @@ from sqlmodel import Field, SQLModel
 
 
 class Endpoint(SQLModel, table=True):
+    """
+    The model for the endpoint table
+    """
+
     id: Optional[int] = Field(default=None, primary_key=True)
     tc_id: int = Field(unique=True)
     name: str
@@ -20,6 +24,10 @@ class Endpoint(SQLModel, table=True):
 
 
 class WebhookLog(SQLModel, table=True):
+    """
+    The model for the webhook log table
+    """
+
     id: Optional[int] = Field(default=None, primary_key=True)
     request_headers: Optional[dict] = Field(nullable=True, sa_type=JSONB)
     request_body: Optional[dict] = Field(nullable=True, sa_type=JSONB)
