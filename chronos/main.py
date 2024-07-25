@@ -5,7 +5,6 @@ import logfire
 import sentry_sdk
 from fastapi import FastAPI
 from logfire import PydanticPlugin
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from starlette.middleware.cors import CORSMiddleware
 
 from chronos.logging import config
@@ -27,12 +26,6 @@ if _app_settings.dev_mode:
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=['*'], allow_headers=['*'])
 
 
-def scrubbing_callback(match: logfire.ScrubMatch):
-    # Assume that SQL queries are safe even if they contain words like 'password'.
-    if match.path == ('attributes', 'db.statement'):
-        return match.value
-
-
 if bool(_app_settings.logfire_token):
     from opentelemetry.instrumentation import psycopg2, requests
 
@@ -41,10 +34,7 @@ if bool(_app_settings.logfire_token):
         send_to_logfire=True,
         token=_app_settings.logfire_token,
         pydantic_plugin=PydanticPlugin(record='all'),
-        scrubbing_callback=scrubbing_callback,
     )
-
-    FastAPIInstrumentor.instrument_app(app)
     psycopg2.Psycopg2Instrumentor().instrument(skip_dep_check=True)
     requests.RequestsInstrumentor().instrument()
 
@@ -54,4 +44,4 @@ app.include_router(main_router, prefix='')
 
 COMMIT = os.getenv('HEROKU_SLUG_COMMIT', '-')[:7]
 RELEASE_CREATED_AT = os.getenv('HEROKU_RELEASE_CREATED_AT', '-')
-logfire.info('starting app {commit=} {release_created_at=}', commit=COMMIT, release_created_at=RELEASE_CREATED_AT)
+# logfire.info('starting app {commit=} {release_created_at=}', commit=COMMIT, release_created_at=RELEASE_CREATED_AT)

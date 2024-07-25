@@ -123,7 +123,7 @@ async def delete_endpoint(
     return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) deleted'}
 
 
-@main_router.get('/logs-callback/', description='Send logs from Chronos to TC')
+@main_router.post('/logs-callback/', description='Send logs from Chronos to TC')
 async def get_logs(
     webhooks: TCGetWebhooks,
     user_agent: Annotated[str | None, Header()] = None,

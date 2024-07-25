@@ -4,8 +4,11 @@ import json
 
 from requests import Request, Response
 
+from chronos.main import app
 from chronos.sql_models import Endpoint, WebhookLog
 from chronos.utils import settings
+
+get_logs_url = app.url_path_for('get_logs')
 
 
 def get_dft_endpoint_data(**kwargs) -> dict:
@@ -13,9 +16,20 @@ def get_dft_endpoint_data(**kwargs) -> dict:
         'tc_id': 1,
         'name': 'test_endpoint',
         'branch_id': 99,
+        'active': True,
         'webhook_url': 'test.com',
         'api_key': 'test',
-        'active': True,
+    }
+    for k, v in kwargs.items():
+        endpoint_dict[k] = v
+    return endpoint_dict
+
+
+def get_dft_endpoint_deletion_data(**kwargs) -> dict:
+    endpoint_dict = {
+        'tc_id': 1,
+        'branch_id': 99,
+        'api_key': 'test',
     }
     for k, v in kwargs.items():
         endpoint_dict[k] = v
@@ -27,6 +41,18 @@ def get_dft_webhook_data(branch_id: int = None, **kwargs) -> dict:
     webhook_dict = {
         'events': [{'branch': branch_id, 'event': 'test_event', 'data': {'test': 'data'}}],
         'request_time': 1234567890,
+    }
+    for k, v in kwargs.items():
+        webhook_dict[k] = v
+    return webhook_dict
+
+
+def get_dft_get_log_data(branch_id: int = None, **kwargs) -> dict:
+    branch_id = branch_id or 99
+    webhook_dict = {
+        'tc_id': 1,
+        'branch_id': branch_id,
+        'page': 0,
     }
     for k, v in kwargs.items():
         webhook_dict[k] = v

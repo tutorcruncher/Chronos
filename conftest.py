@@ -5,8 +5,8 @@ import chronos.sql_models  # noqa: F401
 
 from chronos.db import get_session
 from chronos.main import app
+from chronos.settings import Settings
 from chronos.utils import settings
-
 
 pytest_plugins = ('celery.contrib.pytest',)
 

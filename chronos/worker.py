@@ -54,21 +54,20 @@ def send_webhooks(
     loaded_payload = json.loads(payload)
     loaded_payload['_request_time'] = loaded_payload.pop('request_time')
     branch_id = loaded_payload['events'][0]['branch']
-    total_success, total_failed = 0, 0
 
     with logfire.span(f'Send webhooks on branch: {branch_id}'):
+        total_success, total_failed = 0, 0
         with Session(engine) as db:
             # Get all the endpoints for the branch
             endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
             endpoints = db.exec(endpoints_query).all()
-
             for endpoint in endpoints:
                 # Create sig for the endpoint
-                webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
+                webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(payload).encode(), hashlib.sha256)
                 sig_hex = webhook_sig.hexdigest()
 
                 # Send the Webhook to the endpoint
-                response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=loaded_payload)
+                response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=payload)
 
                 # Define status display and count the successful and failed webhooks
                 if response.status_code in {200, 201, 202, 204}:
