@@ -3,6 +3,7 @@ import hmac
 import json
 from datetime import datetime, timedelta
 
+
 import requests
 from celery.app import Celery
 from fastapi_utilities import repeat_at
@@ -26,14 +27,16 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
     :param data: The Webhook data supplied by TC2
     :return: Endpoint response
     """
+    from chronos.main import logfire
+
     headers = {
         'User-Agent': 'TutorCruncher',
         'Content-Type': 'application/json',
         'webhook-signature': webhook_sig,
     }
-    # logfire.debug('TutorCruncher request to url: {url=}: {data=}', url=url, data=data)
-    # with logfire.span('{method} {url!r}', url=url, method=method):
-    r = session.request(method=method, url=url, json=data, headers=headers)
+    logfire.debug('TutorCruncher request to url: {url=}: {data=}', url=url, data=data)
+    with logfire.span('{method} {url!r}', url=url, method=method):
+        r = session.request(method=method, url=url, json=data, headers=headers)
     app_logger.info('Request method=%s url=%s status_code=%s', method, url, r.status_code, extra={'data': data})
     # r.raise_for_status()
     return r
@@ -43,35 +46,39 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
 def send_webhooks(
     payload: str,
 ):
-    with Session(engine) as db:
-        loaded_payload = json.loads(payload)
-        branch_id = loaded_payload['events'][0]['branch']
+    from chronos.main import logfire
 
-        endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
-        endpoints = db.exec(endpoints_query).all()
+    loaded_payload = json.loads(payload)
+    loaded_payload['_request_time'] = loaded_payload.pop('request_time')
+    branch_id = loaded_payload['events'][0]['branch']
+    total_success, total_failed = 0, 0
 
-        total_success, total_failed = 0, 0
-        for endpoint in endpoints:
-            webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
-            sig_hex = webhook_sig.hexdigest()
-            response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=loaded_payload)
-            if response.status_code in {200, 201, 202, 204}:
-                status = 'Success'
-                total_success += 1
-            else:
-                status = 'Unexpected response'
-                total_failed += 1
-            webhooklog = WebhookLog(
-                endpoint_id=endpoint.id,
-                request_headers=json.dumps(dict(response.request.headers)),
-                request_body=json.dumps((response.request.body.decode())),
-                response_headers=json.dumps(dict(response.headers)),
-                response_body=json.dumps(response.content.decode()),
-                status=status,
-                status_code=response.status_code,
-            )
-            db.add(webhooklog)
-        db.commit()
+    with logfire.span(f'Send webhooks on branch: {branch_id}'):
+        with Session(engine) as db:
+            endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
+            endpoints = db.exec(endpoints_query).all()
+
+            for endpoint in endpoints:
+                webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(loaded_payload).encode(), hashlib.sha256)
+                sig_hex = webhook_sig.hexdigest()
+                response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=loaded_payload)
+                if response.status_code in {200, 201, 202, 204}:
+                    status = 'Success'
+                    total_success += 1
+                else:
+                    status = 'Unexpected response'
+                    total_failed += 1
+                webhooklog = WebhookLog(
+                    endpoint_id=endpoint.id,
+                    request_headers=json.dumps(dict(response.request.headers)),
+                    request_body=json.dumps((response.request.body.decode())),
+                    response_headers=json.dumps(dict(response.headers)),
+                    response_body=json.dumps(response.content.decode()),
+                    status=status,
+                    status_code=response.status_code,
+                )
+                db.add(webhooklog)
+            db.commit()
         app_logger.info(
             '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
             total_success + total_failed,

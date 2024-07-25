@@ -143,11 +143,6 @@ async def get_logs(endpoint_id: int, page: int = 0, db: Session = Depends(get_se
     return {'logs': list_of_webhooks, 'count': count}
 
 
-@main_router.get('/test/', description='Send logs from Chronos to TC')
-async def test(db: Session = Depends(get_session)):
-    return {'message': 'Successfully received webhook from TutorCruncher.'}
-
-
-@main_router.post('/temp-receive-webhook/', description='testing')
+@main_router.post('/test/', description='testing')
 async def ss(request: Request, db: Session = Depends(get_session)):
     return {'message': 'Successfully received webhook from TutorCruncher.'}

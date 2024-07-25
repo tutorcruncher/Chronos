@@ -7,9 +7,9 @@ class TCIntegration(BaseModel):
     tc_id: int
     name: str
     branch_id: int
+    active: bool
     webhook_url: str
     api_key: str
-    active: bool
 
 
 class TCWebhook(BaseModel):

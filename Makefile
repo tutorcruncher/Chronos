@@ -36,4 +36,4 @@ run-server:
 
 .PHONY: run-worker
 run-worker:
-	celery -A app.worker worker --loglevel=info
+	celery -A chronos.worker worker --loglevel=info
