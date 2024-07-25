@@ -10,7 +10,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
 from chronos.db import get_session
-from chronos.pydantic_schema import TCIntegration, TCWebhook
+from chronos.pydantic_schema import TCDeleteIntegration, TCGetWebhooks, TCIntegration, TCWebhook
 from chronos.sql_models import Endpoint, WebhookLog
 from chronos.utils import settings
 from chronos.worker import send_webhooks
@@ -82,10 +82,13 @@ async def create_update_endpoint(
         return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) updated'}
 
 
-@main_router.post(
-    '/delete-endpoint/{endpoint_tc_id}/', description='Receive webhooks from TC and delete endpoints in Chronos'
-)
-async def delete_endpoint(endpoint_tc_id: int, db: Session = Depends(get_session)):
+@main_router.post('/delete-endpoint/', description='Receive webhooks from TC and delete endpoints in Chronos')
+async def delete_endpoint(
+    delete_info: TCDeleteIntegration,
+    user_agent: Annotated[str | None, Header()] = None,
+    webhook_signature: Annotated[str | None, Header()] = None,
+    db: Session = Depends(get_session),
+):
     """
     Receive a payload of data that describes an end point and delete that end point in Chronos
     :param endpoint_tc_id: The id in TC of the endpoint (TC: Integration) to be deleted
@@ -93,28 +96,36 @@ async def delete_endpoint(endpoint_tc_id: int, db: Session = Depends(get_session
     :return:
     """
     # Should change this to pass a dict for more security so we can sign it
-    # webhook_payload = endpoint_info.model_dump()
-    # assert check_headers(webhook_payload, user_agent, webhook_signature)
+    webhook_payload = delete_info.model_dump()
+    assert check_headers(webhook_payload, user_agent, webhook_signature)
 
     try:
-        endpoint_qs = select(Endpoint).where(Endpoint.tc_id == endpoint_tc_id)
+        endpoint_qs = select(Endpoint).filter_by(**webhook_payload)
         endpoint = db.exec(endpoint_qs).one()
     except NoResultFound as e:
-        return {'message': f'Endpoint with TC ID: {endpoint_tc_id} not found: {e}'}
+        return {'message': f'Endpoint with TC ID: {webhook_payload["tc_id"]} not found: {e}'}
     db.delete(endpoint)
     db.commit()
     return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) deleted'}
 
 
-@main_router.get('/get-logs/{endpoint_id}/{page}/', description='Send logs from Chronos to TC')
-async def get_logs(endpoint_id: int, page: int = 0, db: Session = Depends(get_session)):
+@main_router.get('/get-logs/', description='Send logs from Chronos to TC')
+async def get_logs(
+    get_endpoint_info: TCGetWebhooks,
+    user_agent: Annotated[str | None, Header()] = None,
+    webhook_signature: Annotated[str | None, Header()] = None,
+    db: Session = Depends(get_session),
+):
     # Use the api key here to authenticate the request
-    endpoint = db.exec(select(Endpoint).where(Endpoint.tc_id == endpoint_id)).one()
+    webhook_payload = get_endpoint_info.model_dump()
+    assert check_headers(webhook_payload, user_agent, webhook_signature)
+
+    endpoint = db.exec(select(Endpoint).where(Endpoint.tc_id == get_endpoint_info.tc_id)).one()
 
     count_stmt = select(func.count(WebhookLog.id)).where(WebhookLog.endpoint_id == endpoint.id)
     count = db.exec(count_stmt).one()
 
-    offset = page * 50
+    offset = get_endpoint_info.page * 50
     if count < offset:
         return {'logs': [], 'count': count}
 

@@ -3,7 +3,6 @@ import hmac
 import json
 from datetime import datetime, timedelta
 
-
 import requests
 from celery.app import Celery
 from fastapi_utilities import repeat_at

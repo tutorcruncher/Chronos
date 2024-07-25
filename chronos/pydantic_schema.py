@@ -12,6 +12,18 @@ class TCIntegration(BaseModel):
     api_key: str
 
 
+class TCDeleteIntegration(BaseModel):
+    tc_id: int
+    branch_id: int
+    api_key: str
+
+
 class TCWebhook(BaseModel):
     events: list[dict[str, Any]]
     request_time: int
+
+
+class TCGetWebhooks(BaseModel):
+    tc_id: int
+    branch_id: int
+    page: int
