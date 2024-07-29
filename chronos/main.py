@@ -5,7 +5,6 @@ import logfire
 import sentry_sdk
 from fastapi import FastAPI
 from logfire import PydanticPlugin
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from starlette.middleware.cors import CORSMiddleware
 
 from chronos.logging import config
@@ -36,8 +35,6 @@ if bool(_app_settings.logfire_token):
         token=_app_settings.logfire_token,
         pydantic_plugin=PydanticPlugin(record='all'),
     )
-
-    FastAPIInstrumentor.instrument_app(app)
     psycopg2.Psycopg2Instrumentor().instrument(skip_dep_check=True)
     requests.RequestsInstrumentor().instrument()
 

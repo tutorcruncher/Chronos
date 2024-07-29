@@ -15,7 +15,7 @@ format:
 
 .PHONY: test
 test:
-	pytest  --cov=chronos
+	testing=True pytest --cov=chronos
 
 
 .PHONY: reset-db
