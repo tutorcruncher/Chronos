@@ -30,6 +30,7 @@ if bool(_app_settings.logfire_token):
     from opentelemetry.instrumentation import psycopg2, requests
 
     logfire.instrument_fastapi(app)
+    logfire.instrument_celery()
     logfire.configure(
         send_to_logfire=True,
         token=_app_settings.logfire_token,

@@ -49,53 +49,50 @@ def send_webhooks(
     """
     Send the webhook to the relevant endpoints
     """
-    from chronos.main import logfire
-
     loaded_payload = json.loads(payload)
     loaded_payload['_request_time'] = loaded_payload.pop('request_time')
     branch_id = loaded_payload['events'][0]['branch']
 
-    with logfire.span(f'Send webhooks on branch: {branch_id}'):
-        total_success, total_failed = 0, 0
-        with Session(engine) as db:
-            # Get all the endpoints for the branch
-            endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
-            endpoints = db.exec(endpoints_query).all()
-            for endpoint in endpoints:
-                # Create sig for the endpoint
-                webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(payload).encode(), hashlib.sha256)
-                sig_hex = webhook_sig.hexdigest()
+    total_success, total_failed = 0, 0
+    with Session(engine) as db:
+        # Get all the endpoints for the branch
+        endpoints_query = select(Endpoint).where(Endpoint.branch_id == branch_id)
+        endpoints = db.exec(endpoints_query).all()
+        for endpoint in endpoints:
+            # Create sig for the endpoint
+            webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(payload).encode(), hashlib.sha256)
+            sig_hex = webhook_sig.hexdigest()
 
-                # Send the Webhook to the endpoint
-                response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=payload)
+            # Send the Webhook to the endpoint
+            response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=payload)
 
-                # Define status display and count the successful and failed webhooks
-                if response.status_code in {200, 201, 202, 204}:
-                    status = 'Success'
-                    total_success += 1
-                else:
-                    status = 'Unexpected response'
-                    total_failed += 1
+            # Define status display and count the successful and failed webhooks
+            if response.status_code in {200, 201, 202, 204}:
+                status = 'Success'
+                total_success += 1
+            else:
+                status = 'Unexpected response'
+                total_failed += 1
 
-                # Log the response
-                webhooklog = WebhookLog(
-                    endpoint_id=endpoint.id,
-                    request_headers=json.dumps(dict(response.request.headers)),
-                    request_body=json.dumps((response.request.body.decode())),
-                    response_headers=json.dumps(dict(response.headers)),
-                    response_body=json.dumps(response.content.decode()),
-                    status=status,
-                    status_code=response.status_code,
-                )
-                db.add(webhooklog)
-            db.commit()
-        app_logger.info(
-            '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
-            total_success + total_failed,
-            branch_id,
-            total_success,
-            total_failed,
-        )
+            # Log the response
+            webhooklog = WebhookLog(
+                endpoint_id=endpoint.id,
+                request_headers=json.dumps(dict(response.request.headers)),
+                request_body=response.request.body.decode(),
+                response_headers=json.dumps(dict(response.headers)),
+                response_body=json.dumps(response.content.decode()),
+                status=status,
+                status_code=response.status_code,
+            )
+            db.add(webhooklog)
+        db.commit()
+    app_logger.info(
+        '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
+        total_success + total_failed,
+        branch_id,
+        total_success,
+        total_failed,
+    )
 
 
 @repeat_at(cron='0 0 * * *')
