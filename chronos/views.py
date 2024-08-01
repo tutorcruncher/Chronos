@@ -157,7 +157,7 @@ async def get_logs(
     count = db.exec(count_stmt).one()
 
     offset = page * 50
-    if count < offset:
+    if count <= offset:
         return {'message': f'No logs found for page: {page}', 'logs': [], 'count': count}
 
     # Get the Logs and related endpoint
@@ -184,8 +184,3 @@ async def get_logs(
         for log in logs
     ]
     return {'logs': list_of_webhooks, 'count': count}
-
-
-@main_router.post('/test/', description='testing')
-async def ss(request: Request, db: Session = Depends(get_session)):
-    return {'message': 'Successfully received webhook from TutorCruncher.'}

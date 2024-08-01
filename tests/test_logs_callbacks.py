@@ -135,3 +135,4 @@ def test_get_logs_many(session: Session, client: TestClient):
     assert r.status_code == 200
     assert len(r.json()['logs']) == 0
     assert r.json()['count'] == 100
+    assert r.json()['message'] == 'No logs found for page: 2'
