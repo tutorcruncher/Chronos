@@ -30,9 +30,13 @@ install-dev:
 	pip install -r requirements.txt
 	pip install devtools
 
+.PHONY: run-server-dev
+run-server-dev:
+	python -m uvicorn chronos.main:app --reload --port=5000
+
 .PHONY: run-server
 run-server:
-	python -m uvicorn chronos.main:app --reload --port=5000
+	python -m uvicorn chronos.main:app --port=${PORT} --host=${HOST}
 
 .PHONY: run-worker
 run-worker:
