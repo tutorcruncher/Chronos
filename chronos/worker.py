@@ -38,7 +38,7 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
     with logfire.span('{method} {url!r}', url=url, method=method):
         r = session.request(method=method, url=url, json=data, headers=headers)
     app_logger.info('Request method=%s url=%s status_code=%s', method, url, r.status_code, extra={'data': data})
-    # r.raise_for_status()
+    r.raise_for_status()
     return r
 
 
