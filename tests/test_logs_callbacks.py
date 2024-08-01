@@ -57,6 +57,7 @@ def test_get_logs_none(session: Session, client: TestClient):
     assert r.json() == {
         'logs': [],
         'count': 0,
+        'message': 'No logs found for page: 0',
     }
 
 
