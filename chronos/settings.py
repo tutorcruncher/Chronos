@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Optional
 
-from pydantic import RedisDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 THIS_DIR = Path(__file__).parent.resolve()
@@ -22,7 +21,7 @@ class Settings(BaseSettings):
     test_pg_dsn: str = 'postgresql://postgres:postgres@localhost:5432/test_chronos'
 
     # Redis
-    redis_url: str = 'redis://localhost:6399/0'
+    redis_url: str = 'redis://localhost:6379/0'
 
     # Sentry
     sentry_dsn: Optional[str] = None
