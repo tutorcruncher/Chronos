@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     test_pg_dsn: str = 'postgresql://postgres:postgres@localhost:5432/test_chronos'
 
     # Redis
-    redis_url: RedisDsn = 'redis://localhost:6399'
+    redis_url: str = 'redis://localhost:6399/0'
 
     # Sentry
     sentry_dsn: Optional[str] = None

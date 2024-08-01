@@ -11,11 +11,11 @@ from sqlmodel import Session, col, select
 
 from chronos.db import engine, get_session
 from chronos.sql_models import Endpoint, WebhookLog
-from chronos.utils import app_logger
+from chronos.utils import app_logger, settings
 
 session = requests.Session()
 
-celery_app = Celery(__name__, broker='redis://127.0.0.1:6379/0', backend='redis://127.0.0.1:6379/0')
+celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_url)
 
 
 def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: dict = None):
