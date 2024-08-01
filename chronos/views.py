@@ -4,7 +4,7 @@ import json
 from typing import Annotated
 
 import requests
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header
 from sqlalchemy import func
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
