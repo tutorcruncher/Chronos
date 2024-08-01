@@ -10,7 +10,7 @@ THIS_DIR = Path(__file__).parent.resolve()
 class Settings(BaseSettings):
     # Dev and Test settings
     testing: bool = False
-    dev_mode: bool = True
+    dev_mode: bool = False
     log_level: str = 'INFO'
     on_heroku: bool = False
 
@@ -29,6 +29,8 @@ class Settings(BaseSettings):
 
     dft_timezone: str = 'Europe/London'
     tc2_shared_key: str = 'test-key'
+
+    # Do we need this?
     host: str = '0.0.0.0'
     port: int = 8000
 
