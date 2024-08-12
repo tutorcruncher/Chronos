@@ -18,7 +18,6 @@ This means the Chronos needs some certain functionality:
 To set up the Chronos system locally follow these steps:
 
 1. Create the DB in Postgres by calling `make reset-db`
-2. Create the tables by calling `python -m chronos.scripts.create_db_tables`
-3. Start the server using `python -m uvicorn chronos.main:app --reload`
-4. Start the celery worker with `celery -A chronos.worker worker --loglevel=info`
+2. Start the server using `make run-server-dev`
+3. Start the celery worker with `make run-worker`
   

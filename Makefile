@@ -24,6 +24,7 @@ reset-db:
 	psql -h localhost -U postgres -c "CREATE DATABASE chronos"
 	psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS test_chronos"
 	psql -h localhost -U postgres -c "CREATE DATABASE test_chronos"
+	python -m chronos.scripts.create_db_tables
 
 .PHONY: install-dev
 install-dev:
