@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
-from chronos.main import app
 from chronos.sql_models import Endpoint, WebhookLog
 from chronos.worker import _delete_old_logs_job, send_webhooks
 from tests.test_helpers import (
@@ -17,8 +16,6 @@ from tests.test_helpers import (
     get_failed_response,
     get_successful_response,
 )
-
-send_webhook_url = app.url_path_for('send_webhook')
 
 
 class TestWorkers:

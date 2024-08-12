@@ -30,12 +30,14 @@ def check_headers(webhook_payload: dict, user_agent: str, webhook_signature: str
 
 
 @main_router.post(
-    '/send-webhook-callback/', description='Receive webhooks from TC and send them to the relevant endpoints'
+    '/send-webhook-callback/{url_extension}',
+    description='Receive webhooks from TC and send them to the relevant endpoints',
 )
 async def send_webhook(
     webhook: TCWebhook,
     user_agent: Annotated[str | None, Header()] = None,
     webhook_signature: Annotated[str | None, Header()] = None,
+    url_extension: str = None,
 ) -> dict:
     """
     Receive webhook payloads from TC and send them out to the relevant other endpoints
@@ -50,7 +52,7 @@ async def send_webhook(
     assert check_headers(webhook_payload, user_agent, webhook_signature)
 
     # Start job to send webhooks to endpoints on the workers
-    send_webhooks.delay(json.dumps(webhook_payload))
+    send_webhooks.delay(json.dumps(webhook_payload), url_extension)
     return {'message': 'Sending webhooks to endpoints has been successfully initiated.'}
 
 

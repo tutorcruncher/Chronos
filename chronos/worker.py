@@ -44,6 +44,7 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
 @celery_app.task
 def send_webhooks(
     payload: str,
+    url_extension: str = None,
 ):
     """
     Send the webhook to the relevant endpoints
@@ -63,7 +64,7 @@ def send_webhooks(
             sig_hex = webhook_sig.hexdigest()
 
             # Send the Webhook to the endpoint
-            response = webhook_request(endpoint.webhook_url, webhook_sig=sig_hex, data=payload)
+            response = webhook_request(f'{endpoint.webhook_url}{url_extension}', webhook_sig=sig_hex, data=payload)
 
             # Define status display and count the successful and failed webhooks
             if response.status_code in {200, 201, 202, 204}:

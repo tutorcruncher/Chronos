@@ -5,7 +5,6 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from chronos.main import app
 from chronos.sql_models import WebhookLog
 from tests.test_helpers import (
     _get_webhook_headers,
@@ -14,9 +13,8 @@ from tests.test_helpers import (
     get_dft_get_log_data,
     get_dft_webhook_data,
     get_logs_url,
+    send_webhook_url,
 )
-
-send_webhook_url = app.url_path_for('send_webhook')
 
 
 def test_send_webhooks(session: Session, client: TestClient):
