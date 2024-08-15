@@ -17,7 +17,15 @@ This means the Chronos needs some certain functionality:
 # SetUp
 To set up the Chronos system locally follow these steps:
 
-1. Create the DB in Postgres by calling `make reset-db`
-2. Start the server using `make run-server-dev`
-3. Start the celery worker with `make run-worker`
+1. Create a virtual environment
+2. Install the requirements by running `make install-dev`
+3. Create a `.env` file in the root of the project with the following content:
+```
+PG_DSN = "postgresql://postgres:waffle@localhost:5432/chronos"
+TEST_PG_DSN = "postgresql://postgres:waffle@localhost:5432/test_chronos"
+DEV_MODE = True
+```
+4. Create the DB in Postgres by calling `make reset-db`
+5. Start the server using `make run-server-dev`
+6. Start the celery worker with `make run-worker`
   
