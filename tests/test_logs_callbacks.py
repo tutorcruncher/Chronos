@@ -21,7 +21,7 @@ def test_send_webhooks(session: Session, client: TestClient):
     payload = get_dft_webhook_data()
     headers = _get_webhook_headers(payload)
 
-    with patch('chronos.worker.send_webhooks.delay') as mock_task:
+    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
         r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
         assert mock_task.called
     assert r.status_code == 200
@@ -32,7 +32,7 @@ def test_send_webhook_bad_request(session: Session, client: TestClient):
     payload = get_dft_webhook_data(request_time='I am a string')
     headers = _get_webhook_headers(payload)
 
-    with patch('chronos.worker.send_webhooks.delay') as mock_task:
+    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
         r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
         assert not mock_task.called
     assert r.status_code == 422

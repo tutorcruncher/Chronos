@@ -191,7 +191,7 @@ async def get_logs(
     count = db.exec(count_stmt).one()
 
     offset = page * 50
-    if count < offset:
+    if count <= offset:
         return {'message': f'No logs found for page: {page}', 'logs': [], 'count': count}
 
     # Get the Logs and related endpoint
