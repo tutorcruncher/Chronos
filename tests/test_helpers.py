@@ -9,7 +9,8 @@ from chronos.sql_models import Endpoint, WebhookLog
 from chronos.utils import settings
 
 get_logs_url = app.url_path_for('get_logs')
-send_webhook_url = app.url_path_for('send_webhook', url_extension=None)
+send_webhook_with_extension_url = app.url_path_for('send_webhook_with_extension', url_extension='test')
+send_webhook_url = app.url_path_for('send_webhook')
 
 
 def get_dft_endpoint_data(**kwargs) -> dict:

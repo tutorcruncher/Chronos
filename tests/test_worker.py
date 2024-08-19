@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
 from chronos.sql_models import Endpoint, WebhookLog
-from chronos.worker import _delete_old_logs_job, send_webhooks
+from chronos.worker import _delete_old_logs_job, task_send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
@@ -46,7 +46,7 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
 
-        sending_webhooks = send_webhooks.delay(json.dumps(payload))
+        sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
 
         webhooks = db.exec(select(WebhookLog)).all()
@@ -76,7 +76,7 @@ class TestWorkers:
         headers = _get_webhook_headers(payload)
         mock_response.return_value = get_successful_response(payload, headers)
 
-        sending_webhooks = send_webhooks.delay(json.dumps(payload))
+        sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
@@ -114,7 +114,7 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
 
-        sending_webhooks = send_webhooks.delay(json.dumps(payload))
+        sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 5
@@ -138,7 +138,7 @@ class TestWorkers:
         headers = _get_webhook_headers(payload)
         mock_response.return_value = get_successful_response(payload, headers)
 
-        sending_webhooks = send_webhooks.delay(json.dumps(payload))
+        sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
@@ -173,7 +173,7 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
 
-        send_webhooks(json.dumps(payload))
+        task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 1
 
