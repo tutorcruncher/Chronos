@@ -16,6 +16,7 @@ from chronos.utils import app_logger, settings
 session = requests.Session()
 
 celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_url)
+celery_app.conf.broker_connection_retry_on_startup = True
 
 
 def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: dict = None):
@@ -42,7 +43,7 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
 
 
 @celery_app.task
-def send_webhooks(
+def task_send_webhooks(
     payload: str,
     url_extension: str = None,
 ):
@@ -63,8 +64,11 @@ def send_webhooks(
             webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(payload).encode(), hashlib.sha256)
             sig_hex = webhook_sig.hexdigest()
 
+            url = endpoint.webhook_url
+            if url_extension:
+                url += f'/{url_extension}'
             # Send the Webhook to the endpoint
-            response = webhook_request(f'{endpoint.webhook_url}{url_extension}', webhook_sig=sig_hex, data=payload)
+            response = webhook_request(url, webhook_sig=sig_hex, data=loaded_payload)
 
             # Define status display and count the successful and failed webhooks
             if response.status_code in {200, 201, 202, 204}:
@@ -78,7 +82,7 @@ def send_webhooks(
             webhooklog = WebhookLog(
                 endpoint_id=endpoint.id,
                 request_headers=json.dumps(dict(response.request.headers)),
-                request_body=response.request.body.decode(),
+                request_body=json.dumps(response.request.body.decode()),
                 response_headers=json.dumps(dict(response.headers)),
                 response_body=json.dumps(response.content.decode()),
                 status=status,
