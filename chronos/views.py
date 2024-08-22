@@ -218,8 +218,3 @@ async def get_logs(
         for log in logs
     ]
     return {'logs': list_of_webhooks, 'count': count}
-
-
-# @main_router.post('/test/', description='testing')
-# async def reeee(db: Session = Depends(get_session)):
-#     return {'message': 'Successfully received webhook from TutorCruncher.'}
