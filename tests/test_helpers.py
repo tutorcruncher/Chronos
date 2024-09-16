@@ -1,5 +1,3 @@
-import hashlib
-import hmac
 import json
 
 from requests import Request, Response
@@ -83,13 +81,11 @@ def get_dft_webhook_log_data(branch_id: int = None, endpoint_id: int = None, **k
     return webhook_log_dict
 
 
-def _get_webhook_headers(data: dict) -> dict:
-    json_payload = json.dumps(data).encode()
-    webhook_signature = hmac.new(settings.tc2_shared_key.encode(), json_payload, hashlib.sha256)
+def _get_webhook_headers() -> dict:
     return {
         'User-Agent': 'TutorCruncher',
         'Content-Type': 'application/json',
-        'Webhook-Signature': webhook_signature.hexdigest(),
+        'Authorization': f'Bearer {settings.tc2_shared_key}',
     }
 
 
@@ -97,7 +93,7 @@ def _get_endpoint_headers() -> dict:
     return {
         'User-Agent': 'TutorCruncher',
         'Content-Type': 'application/json',
-        'Authorization': settings.tc2_shared_key,
+        'Authorization': f'Bearer {settings.tc2_shared_key}',
     }
 
 

@@ -37,7 +37,7 @@ class TestWorkers:
         db.commit()
 
         payload = get_dft_webhook_data()
-        headers = _get_webhook_headers(payload)
+        headers = _get_webhook_headers()
         mock_response.return_value = get_successful_response(payload, headers)
 
         endpoints = db.exec(select(Endpoint)).all()
@@ -73,7 +73,7 @@ class TestWorkers:
         assert len(webhooks) == 0
 
         payload = get_dft_webhook_data()
-        headers = _get_webhook_headers(payload)
+        headers = _get_webhook_headers()
         mock_response.return_value = get_successful_response(payload, headers)
 
         sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
@@ -108,7 +108,7 @@ class TestWorkers:
         assert len(endpoints_3) == 5
 
         payload = get_dft_webhook_data()
-        headers = _get_webhook_headers(payload)
+        headers = _get_webhook_headers()
         mock_response.return_value = get_successful_response(payload, headers)
 
         webhooks = db.exec(select(WebhookLog)).all()
@@ -135,7 +135,7 @@ class TestWorkers:
         assert len(webhooks) == 0
 
         payload = get_dft_webhook_data(branch_id=199)
-        headers = _get_webhook_headers(payload)
+        headers = _get_webhook_headers()
         mock_response.return_value = get_successful_response(payload, headers)
 
         sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
@@ -167,7 +167,7 @@ class TestWorkers:
         db.commit()
 
         payload = get_dft_webhook_data()
-        headers = _get_webhook_headers(payload)
+        headers = _get_webhook_headers()
         mock_response.return_value = get_failed_response(payload, headers)
 
         webhooks = db.exec(select(WebhookLog)).all()

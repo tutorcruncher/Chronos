@@ -19,7 +19,7 @@ from tests.test_helpers import (
 
 def test_send_webhooks(session: Session, client: TestClient):
     payload = get_dft_webhook_data()
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
 
     with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
         r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
@@ -30,7 +30,7 @@ def test_send_webhooks(session: Session, client: TestClient):
 
 def test_send_webhook_bad_request(session: Session, client: TestClient):
     payload = get_dft_webhook_data(request_time='I am a string')
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
 
     with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
         r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
@@ -45,7 +45,7 @@ def test_get_logs_none(session: Session, client: TestClient):
     session.commit()
 
     payload = get_dft_get_log_data()
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         get_logs_url,
         data=json.dumps(payload),
@@ -75,7 +75,7 @@ def test_get_logs_one(session: Session, client: TestClient):
     assert len(logs) == 1
 
     payload = get_dft_get_log_data()
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         get_logs_url,
         data=json.dumps(payload),
@@ -103,7 +103,7 @@ def test_get_logs_many(session: Session, client: TestClient):
     assert len(logs) == 100
 
     payload = get_dft_get_log_data()
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         get_logs_url,
         data=json.dumps(payload),
@@ -114,7 +114,7 @@ def test_get_logs_many(session: Session, client: TestClient):
     assert r.json()['count'] == 100
 
     payload['page'] = 1
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         get_logs_url,
         data=json.dumps(payload),
@@ -125,7 +125,7 @@ def test_get_logs_many(session: Session, client: TestClient):
     assert r.json()['count'] == 100
 
     payload['page'] = 2
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         get_logs_url,
         data=json.dumps(payload),
