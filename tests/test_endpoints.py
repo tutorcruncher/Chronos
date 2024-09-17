@@ -17,7 +17,7 @@ delete_url = app.url_path_for('delete_endpoint')
 
 def test_create_endpoint(session: Session, client: TestClient):
     payload = get_dft_endpoint_data()
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         create_update_url,
         data=json.dumps(payload),
@@ -33,7 +33,7 @@ def test_update_endpoint_correct_data(session: Session, client: TestClient):
     session.commit()
 
     payload = get_dft_endpoint_data(name='diff name')
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         create_update_url,
         data=json.dumps(payload),
@@ -46,7 +46,7 @@ def test_update_endpoint_correct_data(session: Session, client: TestClient):
 def test_update_endpoint_invalid_data(session: Session, client: TestClient):
     payload = get_dft_endpoint_data(active=50)
 
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         create_update_url,
         data=json.dumps(payload),
@@ -62,7 +62,7 @@ def test_delete_endpoint(session: Session, client: TestClient):
     session.commit()
 
     payload = get_dft_endpoint_deletion_data()
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         delete_url,
         data=json.dumps(payload),
@@ -75,7 +75,7 @@ def test_delete_endpoint(session: Session, client: TestClient):
 def test_delete_endpoint_doesnt_exist(session: Session, client: TestClient):
     tc_id = get_dft_endpoint_data()['tc_id']
     payload = get_dft_endpoint_deletion_data()
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         delete_url,
         data=json.dumps(payload),
@@ -87,7 +87,7 @@ def test_delete_endpoint_doesnt_exist(session: Session, client: TestClient):
 
 def test_delete_endpoint_invalid_data(session: Session, client: TestClient):
     payload = get_dft_endpoint_deletion_data(tc_id='invalid')
-    headers = _get_webhook_headers(payload)
+    headers = _get_webhook_headers()
     r = client.post(
         delete_url,
         data=json.dumps(payload),
