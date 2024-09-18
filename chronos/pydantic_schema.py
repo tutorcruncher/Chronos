@@ -16,14 +16,22 @@ class TCIntegration(BaseModel):
     api_key: str
 
 
+class TCIntegrations(BaseModel):
+    """
+    Pydantic model for the TCIntegrations object
+    """
+
+    integrations: list[TCIntegration]
+    request_time: int
+
+
 class TCDeleteIntegration(BaseModel):
     """
-    Pydantic model for deleting an integration in Chronos
+    Pydantic model for the TCDeleteIntegration object
     """
 
     tc_id: int
     branch_id: int
-    api_key: str
 
 
 class TCWebhook(BaseModel):
@@ -33,13 +41,3 @@ class TCWebhook(BaseModel):
 
     events: list[dict[str, Any]]
     request_time: int
-
-
-class TCGetWebhooks(BaseModel):
-    """
-    Pydantic model for getting webhooks from Chronos
-    """
-
-    tc_id: int
-    branch_id: int
-    page: int

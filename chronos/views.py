@@ -9,7 +9,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
 from chronos.db import get_session
-from chronos.pydantic_schema import TCDeleteIntegration, TCGetWebhooks, TCIntegration, TCWebhook
+from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCWebhook
 from chronos.sql_models import Endpoint, WebhookLog
 from chronos.utils import settings
 from chronos.worker import task_send_webhooks
@@ -65,7 +65,7 @@ async def send_webhook_with_extension(
 
 
 @main_router.post(
-    '/send-webhook-callback/',
+    '/send-webhook-callback',
     description='Receive webhooks from TC and send them to the relevant endpoints',
 )
 async def send_webhook(
@@ -82,40 +82,44 @@ async def send_webhook(
 
 
 @main_router.post(
-    '/create-update-callback/', description='Receive webhooks from TC and create or update endpoints in Chronos'
+    '/create-update-callback', description='Receive webhooks from TC and create or update endpoints in Chronos'
 )
 async def create_update_endpoint(
-    integration: TCIntegration,
+    integration_list: TCIntegrations,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
     db: Session = Depends(get_session),
 ) -> dict:
     """
     Receive a payload of data that describes an end point and either create or update that end point in Chronos
-    :param integration: TCIntegration object, the payload from TC2 using pydantic validation to create the Endpoint
+    :param integration_list: TCIntegration object(s), the payload from TC2 using pydantic validation to create the Endpoint
                             object
     :param authorisation: auth token to check the request is from TC
     :param db: Session object for the database
     :return:
     """
     assert check_authorisation(authorisation)
-    webhook_payload = integration.model_dump()
 
-    # Check if the endpoint already exists, if it does then we update it. Otherwise, we create a new one.
-    try:
-        endpoint_qs = select(Endpoint).where(Endpoint.tc_id == integration.tc_id)
-        endpoint = db.exec(endpoint_qs).one()
-    except NoResultFound:
-        endpoint = Endpoint(**webhook_payload)
-        db.add(endpoint)
-        db.commit()
-        return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) created'}
-    else:
-        endpoint.sqlmodel_update(integration)
-        db.commit()
-        return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) updated'}
+    created, updated = [], []
+
+    for integration in integration_list.integrations:
+        # Check if the endpoint already exists, if it does then we update it. Otherwise, we create a new one.
+        webhook_payload = integration.model_dump()
+        try:
+            endpoint_qs = select(Endpoint).where(Endpoint.tc_id == integration.tc_id)
+            endpoint = db.exec(endpoint_qs).one()
+        except NoResultFound:
+            endpoint = Endpoint(**webhook_payload)
+            db.add(endpoint)
+            db.commit()
+            created.append({'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) created'})
+        else:
+            endpoint.sqlmodel_update(integration)
+            db.commit()
+            updated.append({'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) updated'})
+    return {'created': created, 'updated': updated}
 
 
-@main_router.post('/delete-callback/', description='Receive webhooks from TC and delete endpoints in Chronos')
+@main_router.post('/delete-callback', description='Receive webhooks from TC and delete endpoints in Chronos')
 async def delete_endpoint(
     delete_data: TCDeleteIntegration,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
@@ -151,30 +155,30 @@ async def delete_endpoint(
     return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) deleted'}
 
 
-@main_router.post('/logs-callback/', description='Send logs from Chronos to TC')
+@main_router.get('/logs-callback/{tc_id}/{page}', description='Send logs from Chronos to TC')
 async def get_logs(
-    webhooks: TCGetWebhooks,
+    tc_id: int,
+    page: int,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
     db: Session = Depends(get_session),
 ):
     """
     Receive a payload of data that describes an end point and delete that end point in Chronos
-    :param webhooks: Contains webhook id in TC, branch_id and the page number
+    :param tc_id: ID of integration in TC
+    :param page: Page for logs
     :param authorisation: auth token to check the request is from TC
     :param db: Session object for the database
     :return:
     """
 
     assert check_authorisation(authorisation)
-    webhook_payload = webhooks.model_dump()
-    page = webhook_payload.pop('page')
 
     # Get the endpoint from the TC ID or return an error
     try:
-        endpoint_qs = select(Endpoint).filter_by(**webhook_payload)
+        endpoint_qs = select(Endpoint).filter_by(tc_id=tc_id)
         endpoint = db.exec(endpoint_qs).one()
     except NoResultFound as e:
-        return {'message': f'Endpoint with TC ID: {webhook_payload["tc_id"]} not found: {e}', 'logs': [], 'count': 0}
+        return {'message': f'Endpoint with TC ID: {tc_id} not found: {e}', 'logs': [], 'count': 0}
 
     # Get the total count of logs for the relevant endpoint
     count_stmt = select(func.count(WebhookLog.id)).where(WebhookLog.endpoint_id == endpoint.id)
@@ -208,3 +212,10 @@ async def get_logs(
         for log in logs
     ]
     return {'logs': list_of_webhooks, 'count': count}
+
+
+@main_router.post('/testing', description='Send logs from Chronos to TC')
+async def testing(
+    authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+):
+    return {'success': True}
