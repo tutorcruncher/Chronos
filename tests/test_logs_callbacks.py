@@ -5,6 +5,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from chronos.main import app
 from chronos.sql_models import WebhookLog
 from tests.test_helpers import (
     _get_webhook_headers,
@@ -12,7 +13,6 @@ from tests.test_helpers import (
     create_webhook_log_from_dft_data,
     get_dft_get_log_data,
     get_dft_webhook_data,
-    get_logs_url,
     send_webhook_url,
 )
 
@@ -46,9 +46,9 @@ def test_get_logs_none(session: Session, client: TestClient):
 
     payload = get_dft_get_log_data()
     headers = _get_webhook_headers()
+    get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
     r = client.post(
         get_logs_url,
-        data=json.dumps(payload),
         headers=headers,
     )
     assert r.status_code == 200
@@ -76,9 +76,9 @@ def test_get_logs_one(session: Session, client: TestClient):
 
     payload = get_dft_get_log_data()
     headers = _get_webhook_headers()
+    get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
     r = client.post(
         get_logs_url,
-        data=json.dumps(payload),
         headers=headers,
     )
     assert r.status_code == 200
@@ -104,9 +104,9 @@ def test_get_logs_many(session: Session, client: TestClient):
 
     payload = get_dft_get_log_data()
     headers = _get_webhook_headers()
+    get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
     r = client.post(
         get_logs_url,
-        data=json.dumps(payload),
         headers=headers,
     )
     assert r.status_code == 200
@@ -115,9 +115,9 @@ def test_get_logs_many(session: Session, client: TestClient):
 
     payload['page'] = 1
     headers = _get_webhook_headers()
+    get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
     r = client.post(
         get_logs_url,
-        data=json.dumps(payload),
         headers=headers,
     )
     assert r.status_code == 200
@@ -126,9 +126,9 @@ def test_get_logs_many(session: Session, client: TestClient):
 
     payload['page'] = 2
     headers = _get_webhook_headers()
+    get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
     r = client.post(
         get_logs_url,
-        data=json.dumps(payload),
         headers=headers,
     )
     assert r.status_code == 200

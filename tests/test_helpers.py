@@ -6,7 +6,6 @@ from chronos.main import app
 from chronos.sql_models import Endpoint, WebhookLog
 from chronos.utils import settings
 
-get_logs_url = app.url_path_for('get_logs')
 send_webhook_with_extension_url = app.url_path_for('send_webhook_with_extension', url_extension='test')
 send_webhook_url = app.url_path_for('send_webhook')
 
@@ -47,11 +46,9 @@ def get_dft_webhook_data(branch_id: int = None, **kwargs) -> dict:
     return webhook_dict
 
 
-def get_dft_get_log_data(branch_id: int = None, **kwargs) -> dict:
-    branch_id = branch_id or 99
+def get_dft_get_log_data(tc_id: int = None, **kwargs) -> dict:
     webhook_dict = {
-        'tc_id': 1,
-        'branch_id': branch_id,
+        'tc_id': tc_id or 1,
         'page': 0,
     }
     for k, v in kwargs.items():
