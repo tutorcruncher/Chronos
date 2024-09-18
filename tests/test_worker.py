@@ -32,7 +32,7 @@ class TestWorkers:
 
     @patch('chronos.worker.session.request')
     def test_send_webhook_one(self, mock_response, db: Session, client: TestClient, celery_session_worker):
-        ep = create_endpoint_from_dft_data()
+        ep = create_endpoint_from_dft_data()[0]
         db.add(ep)
         db.commit()
 
@@ -61,8 +61,8 @@ class TestWorkers:
         endpoints = db.exec(select(Endpoint)).all()
         assert len(endpoints) == 0
 
-        for tc_id in range(1, 11):
-            ep = create_endpoint_from_dft_data(tc_id=tc_id)
+        eps = create_endpoint_from_dft_data(count=10)
+        for ep in eps:
             db.add(ep)
         db.commit()
 
@@ -87,13 +87,13 @@ class TestWorkers:
         assert len(endpoints) == 0
 
         for tc_id in range(1, 6):
-            ep = create_endpoint_from_dft_data(tc_id=tc_id)
+            ep = create_endpoint_from_dft_data(tc_id=tc_id)[0]
             db.add(ep)
 
-            ep = create_endpoint_from_dft_data(tc_id=tc_id + 10, branch_id=199)
+            ep = create_endpoint_from_dft_data(tc_id=tc_id + 10, branch_id=199)[0]
             db.add(ep)
 
-            ep = create_endpoint_from_dft_data(tc_id=tc_id + 100, branch_id=299)
+            ep = create_endpoint_from_dft_data(tc_id=tc_id + 100, branch_id=299)[0]
             db.add(ep)
         db.commit()
 
@@ -162,8 +162,9 @@ class TestWorkers:
     def test_send_webhook_fail_to_send_only_one(
         self, mock_response, db: Session, client: TestClient, celery_session_worker
     ):
-        ep = create_endpoint_from_dft_data()
-        db.add(ep)
+        eps = create_endpoint_from_dft_data()
+        for ep in eps:
+            db.add(ep)
         db.commit()
 
         payload = get_dft_webhook_data()
@@ -182,8 +183,9 @@ class TestWorkers:
         assert webhook.status_code == 409
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
-        ep = create_endpoint_from_dft_data()
-        db.add(ep)
+        eps = create_endpoint_from_dft_data()
+        for ep in eps:
+            db.add(ep)
         db.commit()
 
         for i in range(1, 31):

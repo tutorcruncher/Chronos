@@ -10,25 +10,27 @@ send_webhook_with_extension_url = app.url_path_for('send_webhook_with_extension'
 send_webhook_url = app.url_path_for('send_webhook')
 
 
-def get_dft_endpoint_data(**kwargs) -> dict:
-    endpoint_dict = {
-        'tc_id': 1,
-        'name': 'test_endpoint',
-        'branch_id': 99,
-        'active': True,
-        'webhook_url': 'test.com',
-        'api_key': 'test',
-    }
-    for k, v in kwargs.items():
-        endpoint_dict[k] = v
-    return endpoint_dict
+def get_dft_endpoint_data_list(count: int = 1, **kwargs) -> dict:
+    integrations = []
+    for i in range(1, count + 1):
+        integration_dict = {
+            'tc_id': i,
+            'name': f'test_endpoint_{i}',
+            'branch_id': 99,
+            'active': True,
+            'webhook_url': f'https://test_endpoint_{i}.com',
+            'api_key': 'test_key',
+        }
+        for k, v in kwargs.items():
+            integration_dict[k] = v
+        integrations.append(integration_dict)
+    return {'integrations': integrations, 'request_time': 1234567890}
 
 
 def get_dft_endpoint_deletion_data(**kwargs) -> dict:
     endpoint_dict = {
         'tc_id': 1,
         'branch_id': 99,
-        'api_key': 'test',
     }
     for k, v in kwargs.items():
         endpoint_dict[k] = v
@@ -94,9 +96,12 @@ def _get_endpoint_headers() -> dict:
     }
 
 
-def create_endpoint_from_dft_data(**kwargs) -> Endpoint:
-    webhook_data = get_dft_endpoint_data(**kwargs)
-    return Endpoint(**webhook_data)
+def create_endpoint_from_dft_data(count: int = 1, **kwargs) -> list[Endpoint]:
+    integration_data = get_dft_endpoint_data_list(count=count, **kwargs)
+    if len(integration_data['integrations']) == 1:
+        return [Endpoint(**integration_data['integrations'][0])]
+    else:
+        return [Endpoint(**integration) for integration in integration_data['integrations']]
 
 
 def create_webhook_log_from_dft_data(**kwargs) -> WebhookLog:

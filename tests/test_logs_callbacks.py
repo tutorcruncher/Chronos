@@ -40,14 +40,15 @@ def test_send_webhook_bad_request(session: Session, client: TestClient):
 
 
 def test_get_logs_none(session: Session, client: TestClient):
-    ep = create_endpoint_from_dft_data()
-    session.add(ep)
+    eps = create_endpoint_from_dft_data()
+    session.add(eps[0])
     session.commit()
 
     payload = get_dft_get_log_data()
     headers = _get_webhook_headers()
     get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
-    r = client.post(
+
+    r = client.get(
         get_logs_url,
         headers=headers,
     )
@@ -60,7 +61,8 @@ def test_get_logs_none(session: Session, client: TestClient):
 
 
 def test_get_logs_one(session: Session, client: TestClient):
-    ep = create_endpoint_from_dft_data()
+    eps = create_endpoint_from_dft_data()
+    ep = eps[0]
     session.add(ep)
     session.commit()
 
@@ -77,7 +79,7 @@ def test_get_logs_one(session: Session, client: TestClient):
     payload = get_dft_get_log_data()
     headers = _get_webhook_headers()
     get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
-    r = client.post(
+    r = client.get(
         get_logs_url,
         headers=headers,
     )
@@ -87,7 +89,8 @@ def test_get_logs_one(session: Session, client: TestClient):
 
 
 def test_get_logs_many(session: Session, client: TestClient):
-    ep = create_endpoint_from_dft_data()
+    eps = create_endpoint_from_dft_data()
+    ep = eps[0]
     session.add(ep)
     session.commit()
 
@@ -105,7 +108,7 @@ def test_get_logs_many(session: Session, client: TestClient):
     payload = get_dft_get_log_data()
     headers = _get_webhook_headers()
     get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
-    r = client.post(
+    r = client.get(
         get_logs_url,
         headers=headers,
     )
@@ -116,7 +119,7 @@ def test_get_logs_many(session: Session, client: TestClient):
     payload['page'] = 1
     headers = _get_webhook_headers()
     get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
-    r = client.post(
+    r = client.get(
         get_logs_url,
         headers=headers,
     )
@@ -127,7 +130,7 @@ def test_get_logs_many(session: Session, client: TestClient):
     payload['page'] = 2
     headers = _get_webhook_headers()
     get_logs_url = app.url_path_for('get_logs', tc_id=payload['tc_id'], page=payload['page'])
-    r = client.post(
+    r = client.get(
         get_logs_url,
         headers=headers,
     )

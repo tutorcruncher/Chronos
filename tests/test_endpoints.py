@@ -7,7 +7,7 @@ from chronos.main import app
 from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
-    get_dft_endpoint_data,
+    get_dft_endpoint_data_list,
     get_dft_endpoint_deletion_data,
 )
 
@@ -16,7 +16,7 @@ delete_url = app.url_path_for('delete_endpoint')
 
 
 def test_create_endpoint(session: Session, client: TestClient):
-    payload = get_dft_endpoint_data()
+    payload = get_dft_endpoint_data_list()
     headers = _get_webhook_headers()
     r = client.post(
         create_update_url,
@@ -24,15 +24,21 @@ def test_create_endpoint(session: Session, client: TestClient):
         headers=headers,
     )
     assert r.status_code == 200
-    assert r.json() == {'message': f'Endpoint test_endpoint (TC ID: {payload["tc_id"]}) created'}
+    response = r.json()
+    created, updated = response['created'], response['updated']
+    integration = payload['integrations'][0]
+    assert {
+        'message': f'Endpoint test_endpoint_{integration["tc_id"]} (TC ID: {integration["tc_id"]}) created'
+    } in created
+    assert not updated
 
 
 def test_update_endpoint_correct_data(session: Session, client: TestClient):
-    ep = create_endpoint_from_dft_data()
-    session.add(ep)
+    eps = create_endpoint_from_dft_data()
+    session.add(eps[0])
     session.commit()
 
-    payload = get_dft_endpoint_data(name='diff name')
+    payload = get_dft_endpoint_data_list(name='diff name')
     headers = _get_webhook_headers()
     r = client.post(
         create_update_url,
@@ -40,13 +46,17 @@ def test_update_endpoint_correct_data(session: Session, client: TestClient):
         headers=headers,
     )
     assert r.status_code == 200
-    assert r.json() == {'message': f'Endpoint diff name (TC ID: {payload["tc_id"]}) updated'}
+    response = r.json()
+    created, updated = response['created'], response['updated']
+    integration = payload['integrations'][0]
+    assert {'message': f'Endpoint diff name (TC ID: {integration["tc_id"]}) updated'} in updated
+    assert not created
 
 
 def test_update_endpoint_invalid_data(session: Session, client: TestClient):
-    payload = get_dft_endpoint_data(active=50)
-
+    payload = get_dft_endpoint_data_list(active=50)
     headers = _get_webhook_headers()
+
     r = client.post(
         create_update_url,
         data=json.dumps(payload),
@@ -57,7 +67,8 @@ def test_update_endpoint_invalid_data(session: Session, client: TestClient):
 
 
 def test_delete_endpoint(session: Session, client: TestClient):
-    ep = create_endpoint_from_dft_data()
+    eps = create_endpoint_from_dft_data()
+    ep = eps[0]
     session.add(ep)
     session.commit()
 
@@ -73,7 +84,7 @@ def test_delete_endpoint(session: Session, client: TestClient):
 
 
 def test_delete_endpoint_doesnt_exist(session: Session, client: TestClient):
-    tc_id = get_dft_endpoint_data()['tc_id']
+    tc_id = get_dft_endpoint_data_list()['integrations'][0]['tc_id']
     payload = get_dft_endpoint_deletion_data()
     headers = _get_webhook_headers()
     r = client.post(
