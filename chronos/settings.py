@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     testing: bool = False
     dev_mode: bool = False
     log_level: str = 'INFO'
-    on_heroku: bool = False
+    on_beta: bool = False
 
     logfire_token: Optional[str] = None
     logfire_ignore_no_config: int = 1

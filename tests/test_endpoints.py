@@ -28,7 +28,7 @@ def test_create_endpoint(session: Session, client: TestClient):
     created, updated = response['created'], response['updated']
     integration = payload['integrations'][0]
     assert {
-        'message': f'Endpoint test_endpoint_{integration["tc_id"]} (TC ID: {integration["tc_id"]}) created'
+        'message': f'WebhookEndpoint test_endpoint_{integration["tc_id"]} (TC ID: {integration["tc_id"]}) created'
     } in created
     assert not updated
 
@@ -49,7 +49,7 @@ def test_update_endpoint_correct_data(session: Session, client: TestClient):
     response = r.json()
     created, updated = response['created'], response['updated']
     integration = payload['integrations'][0]
-    assert {'message': f'Endpoint diff name (TC ID: {integration["tc_id"]}) updated'} in updated
+    assert {'message': f'WebhookEndpoint diff name (TC ID: {integration["tc_id"]}) updated'} in updated
     assert not created
 
 
@@ -80,7 +80,7 @@ def test_delete_endpoint(session: Session, client: TestClient):
         headers=headers,
     )
     assert r.status_code == 200
-    assert r.json() == {'message': f'Endpoint {ep.name} (TC ID: {ep.tc_id}) deleted'}
+    assert r.json() == {'message': f'WebhookEndpoint {ep.name} (TC ID: {ep.tc_id}) deleted'}
 
 
 def test_delete_endpoint_doesnt_exist(session: Session, client: TestClient):
@@ -93,7 +93,9 @@ def test_delete_endpoint_doesnt_exist(session: Session, client: TestClient):
         headers=headers,
     )
     assert r.status_code == 200
-    assert r.json() == {'message': f'Endpoint with TC ID: {tc_id} not found: No row was found when one was required'}
+    assert r.json() == {
+        'message': f'WebhookEndpoint with TC ID: {tc_id} not found: No row was found when one was required'
+    }
 
 
 def test_delete_endpoint_invalid_data(session: Session, client: TestClient):

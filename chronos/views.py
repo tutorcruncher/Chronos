@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 
 from chronos.db import get_session
 from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCWebhook
-from chronos.sql_models import Endpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import settings
 from chronos.worker import task_send_webhooks
 
@@ -91,7 +91,7 @@ async def create_update_endpoint(
 ) -> dict:
     """
     Receive a payload of data that describes an end point and either create or update that end point in Chronos
-    :param integration_list: TCIntegration object(s), the payload from TC2 using pydantic validation to create the Endpoint
+    :param integration_list: TCIntegration object(s), the payload from TC2 using pydantic validation to create the WebhookEndpoint
                             object
     :param authorisation: auth token to check the request is from TC
     :param db: Session object for the database
@@ -105,21 +105,21 @@ async def create_update_endpoint(
         # Check if the endpoint already exists, if it does then we update it. Otherwise, we create a new one.
         webhook_payload = integration.model_dump()
         try:
-            endpoint_qs = select(Endpoint).where(Endpoint.tc_id == integration.tc_id)
+            endpoint_qs = select(WebhookEndpoint).where(WebhookEndpoint.tc_id == integration.tc_id)
             endpoint = db.exec(endpoint_qs).one()
         except NoResultFound:
-            endpoint = Endpoint(**webhook_payload)
+            endpoint = WebhookEndpoint(**webhook_payload)
             db.add(endpoint)
             db.commit()
-            created.append({'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) created'})
+            created.append({'message': f'WebhookEndpoint {endpoint.name} (TC ID: {endpoint.tc_id}) created'})
         else:
             endpoint.sqlmodel_update(integration)
             db.commit()
-            updated.append({'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) updated'})
+            updated.append({'message': f'WebhookEndpoint {endpoint.name} (TC ID: {endpoint.tc_id}) updated'})
     return {'created': created, 'updated': updated}
 
 
-@main_router.post('/delete-callback', description='Receive webhooks from TC and delete endpoints in Chronos')
+@main_router.post('/delete-endpoint', description='Receive webhooks from TC and delete endpoints in Chronos')
 async def delete_endpoint(
     delete_data: TCDeleteIntegration,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
@@ -138,13 +138,13 @@ async def delete_endpoint(
 
     # Check the endpoint exists and delete it
     try:
-        endpoint_qs = select(Endpoint).filter_by(**webhook_payload)
+        endpoint_qs = select(WebhookEndpoint).filter_by(**webhook_payload)
         endpoint = db.exec(endpoint_qs).one()
     except NoResultFound as e:
-        return {'message': f'Endpoint with TC ID: {webhook_payload["tc_id"]} not found: {e}'}
+        return {'message': f'WebhookEndpoint with TC ID: {webhook_payload["tc_id"]} not found: {e}'}
 
     # Have to delete existing hooks before deleting the endpoint
-    webhooks_qs = select(WebhookLog).filter_by(endpoint_id=endpoint.id)
+    webhooks_qs = select(WebhookLog).filter_by(webhook_endpoint_id=endpoint.id)
     webhooks = db.exec(webhooks_qs).all()
     for webhook in webhooks:
         db.delete(webhook)
@@ -152,10 +152,10 @@ async def delete_endpoint(
 
     db.delete(endpoint)
     db.commit()
-    return {'message': f'Endpoint {endpoint.name} (TC ID: {endpoint.tc_id}) deleted'}
+    return {'message': f'WebhookEndpoint {endpoint.name} (TC ID: {endpoint.tc_id}) deleted'}
 
 
-@main_router.get('/logs-callback/{tc_id}/{page}', description='Send logs from Chronos to TC')
+@main_router.get('/{tc_id}/logs/{page}', description='Send logs from Chronos to TC')
 async def get_logs(
     tc_id: int,
     page: int,
@@ -175,13 +175,13 @@ async def get_logs(
 
     # Get the endpoint from the TC ID or return an error
     try:
-        endpoint_qs = select(Endpoint).filter_by(tc_id=tc_id)
+        endpoint_qs = select(WebhookEndpoint).filter_by(tc_id=tc_id)
         endpoint = db.exec(endpoint_qs).one()
     except NoResultFound as e:
-        return {'message': f'Endpoint with TC ID: {tc_id} not found: {e}', 'logs': [], 'count': 0}
+        return {'message': f'WebhookEndpoint with TC ID: {tc_id} not found: {e}', 'logs': [], 'count': 0}
 
     # Get the total count of logs for the relevant endpoint
-    count_stmt = select(func.count(WebhookLog.id)).where(WebhookLog.endpoint_id == endpoint.id)
+    count_stmt = select(func.count(WebhookLog.id)).where(WebhookLog.webhook_endpoint_id == endpoint.id)
     count = db.exec(count_stmt).one()
 
     offset = page * 50
@@ -191,7 +191,7 @@ async def get_logs(
     # Get the Logs and related endpoint
     statement = (
         select(WebhookLog)
-        .where(WebhookLog.endpoint_id == endpoint.id)
+        .where(WebhookLog.webhook_endpoint_id == endpoint.id)
         .order_by(WebhookLog.timestamp.desc())
         .offset(offset)
         .limit(50)

@@ -3,7 +3,7 @@ import json
 from requests import Request, Response
 
 from chronos.main import app
-from chronos.sql_models import Endpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import settings
 
 send_webhook_with_extension_url = app.url_path_for('send_webhook_with_extension', url_extension='test')
@@ -58,7 +58,7 @@ def get_dft_get_log_data(tc_id: int = None, **kwargs) -> dict:
     return webhook_dict
 
 
-def get_dft_webhook_log_data(branch_id: int = None, endpoint_id: int = None, **kwargs) -> dict:
+def get_dft_webhook_log_data(branch_id: int = None, webhook_endpoint_id: int = None, **kwargs) -> dict:
     branch_id = branch_id or 99
     webhook_log_dict = {
         'request_headers': json.dumps({'User-Agent': 'TutorCruncher', 'Content-Type': 'application/json'}),
@@ -73,7 +73,7 @@ def get_dft_webhook_log_data(branch_id: int = None, endpoint_id: int = None, **k
         'status': 'Success',
         'status_code': 200,
         'timestamp': 1234567890,
-        'endpoint_id': endpoint_id or 1,
+        'webhook_endpoint_id': webhook_endpoint_id or 1,
     }
     for k, v in kwargs.items():
         webhook_log_dict[k] = v
@@ -96,12 +96,12 @@ def _get_endpoint_headers() -> dict:
     }
 
 
-def create_endpoint_from_dft_data(count: int = 1, **kwargs) -> list[Endpoint]:
+def create_endpoint_from_dft_data(count: int = 1, **kwargs) -> list[WebhookEndpoint]:
     integration_data = get_dft_endpoint_data_list(count=count, **kwargs)
     if len(integration_data['integrations']) == 1:
-        return [Endpoint(**integration_data['integrations'][0])]
+        return [WebhookEndpoint(**integration_data['integrations'][0])]
     else:
-        return [Endpoint(**integration) for integration in integration_data['integrations']]
+        return [WebhookEndpoint(**integration) for integration in integration_data['integrations']]
 
 
 def create_webhook_log_from_dft_data(**kwargs) -> WebhookLog:

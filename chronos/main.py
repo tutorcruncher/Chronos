@@ -21,9 +21,14 @@ if _app_settings.sentry_dsn:
 
 app = FastAPI()
 
-allowed_origins = ['https://secure.tutorcruncher.com']
+if _app_settings.on_beta:
+    allowed_origins = ['https://beta.tutorcruncher.com']
+else:
+    allowed_origins = ['https://secure.tutorcruncher.com']
+
 if _app_settings.dev_mode:
     allowed_origins = ['*']
+
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=['*'], allow_headers=['*'])
 
 

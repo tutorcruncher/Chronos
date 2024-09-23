@@ -67,7 +67,7 @@ def test_get_logs_one(session: Session, client: TestClient):
     session.commit()
 
     whl = create_webhook_log_from_dft_data(
-        endpoint_id=ep.id,
+        webhook_endpoint_id=ep.id,
         timestamp=datetime.now(),
     )
     session.add(whl)
@@ -96,7 +96,7 @@ def test_get_logs_many(session: Session, client: TestClient):
 
     for i in range(1, 101):
         whl = create_webhook_log_from_dft_data(
-            endpoint_id=ep.id,
+            webhook_endpoint_id=ep.id,
             timestamp=datetime.now() - timedelta(days=i),
         )
         session.add(whl)

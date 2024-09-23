@@ -5,9 +5,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 
-class Endpoint(SQLModel, table=True):
+class WebhookEndpoint(SQLModel, table=True):
     """
-    The model for the endpoint table
+    The model for the webhook endpoint table
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -20,7 +20,7 @@ class Endpoint(SQLModel, table=True):
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)  # do we care?
 
     def __repr__(self):
-        return f'Endpoint(id={self.id}, name={self.name}, webhook_url={self.webhook_url})'
+        return f'WebhookEndpoint(id={self.id}, name={self.name}, webhook_url={self.webhook_url})'
 
 
 class WebhookLog(SQLModel, table=True):
@@ -37,7 +37,7 @@ class WebhookLog(SQLModel, table=True):
     status_code: Optional[int]
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
 
-    endpoint_id: int | None = Field(default=None, foreign_key='endpoint.id')
+    webhook_endpoint_id: int | None = Field(default=None, foreign_key='webhookendpoint.id')
 
     def __repr__(self):
         return f'WebhookLog(id={self.id}, payload={self.request_body}, created_at={self.timestamp})'

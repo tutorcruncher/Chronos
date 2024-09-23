@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
-from chronos.sql_models import Endpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.worker import _delete_old_logs_job, task_send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,
@@ -40,7 +40,7 @@ class TestWorkers:
         headers = _get_webhook_headers()
         mock_response.return_value = get_successful_response(payload, headers)
 
-        endpoints = db.exec(select(Endpoint)).all()
+        endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 1
 
         webhooks = db.exec(select(WebhookLog)).all()
@@ -58,7 +58,7 @@ class TestWorkers:
 
     @patch('chronos.worker.session.request')
     def test_send_many_endpoints(self, mock_response, db: Session, client: TestClient, celery_session_worker):
-        endpoints = db.exec(select(Endpoint)).all()
+        endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 0
 
         eps = create_endpoint_from_dft_data(count=10)
@@ -66,7 +66,7 @@ class TestWorkers:
             db.add(ep)
         db.commit()
 
-        endpoints = db.exec(select(Endpoint)).all()
+        endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 10
 
         webhooks = db.exec(select(WebhookLog)).all()
@@ -83,7 +83,7 @@ class TestWorkers:
 
     @patch('chronos.worker.session.request')
     def test_send_correct_branch(self, mock_response, db: Session, client: TestClient, celery_session_worker):
-        endpoints = db.exec(select(Endpoint)).all()
+        endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 0
 
         for tc_id in range(1, 6):
@@ -97,14 +97,14 @@ class TestWorkers:
             db.add(ep)
         db.commit()
 
-        endpoints = db.exec(select(Endpoint)).all()
+        endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 15
 
-        endpoints_1 = db.exec(select(Endpoint).where(Endpoint.branch_id == 99)).all()
+        endpoints_1 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.branch_id == 99)).all()
         assert len(endpoints_1) == 5
-        endpoints_2 = db.exec(select(Endpoint).where(Endpoint.branch_id == 199)).all()
+        endpoints_2 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.branch_id == 199)).all()
         assert len(endpoints_2) == 5
-        endpoints_3 = db.exec(select(Endpoint).where(Endpoint.branch_id == 299)).all()
+        endpoints_3 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.branch_id == 299)).all()
         assert len(endpoints_3) == 5
 
         payload = get_dft_webhook_data()
@@ -120,17 +120,17 @@ class TestWorkers:
         assert len(webhooks) == 5
 
         webhooks = db.exec(
-            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_1]))
+            select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_1]))
         ).all()
         assert len(webhooks) == 5
 
         webhooks = db.exec(
-            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_2]))
+            select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_2]))
         ).all()
         assert len(webhooks) == 0
 
         webhooks = db.exec(
-            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_3]))
+            select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_3]))
         ).all()
         assert len(webhooks) == 0
 
@@ -144,17 +144,17 @@ class TestWorkers:
         assert len(webhooks) == 10
 
         webhooks = db.exec(
-            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_1]))
+            select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_1]))
         ).all()
         assert len(webhooks) == 5
 
         webhooks = db.exec(
-            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_2]))
+            select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_2]))
         ).all()
         assert len(webhooks) == 5
 
         webhooks = db.exec(
-            select(WebhookLog).where(col(WebhookLog.endpoint_id).in_([ep.id for ep in endpoints_3]))
+            select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_3]))
         ).all()
         assert len(webhooks) == 0
 
@@ -190,7 +190,7 @@ class TestWorkers:
 
         for i in range(1, 31):
             whl = create_webhook_log_from_dft_data(
-                endpoint_id=ep.id,
+                webhook_endpoint_id=ep.id,
                 timestamp=datetime.utcnow() - timedelta(days=i),
             )
             db.add(whl)
