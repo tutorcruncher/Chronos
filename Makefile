@@ -41,4 +41,4 @@ run-server:
 
 .PHONY: run-worker
 run-worker:
-	celery -A chronos.worker worker --loglevel=info --autoscale 4,2
+	celery -A chronos.worker worker --loglevel=info --autoscale 4,2 -E
