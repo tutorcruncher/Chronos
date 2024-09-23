@@ -10,6 +10,7 @@ from starlette.middleware.cors import CORSMiddleware
 from chronos.logging import config
 from chronos.utils import settings as _app_settings
 from chronos.views import main_router
+from chronos.worker import cronjob
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if _app_settings.sentry_dsn:
@@ -27,8 +28,6 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=
 
 
 if bool(_app_settings.logfire_token):
-    from opentelemetry.instrumentation import psycopg2, requests
-
     logfire.instrument_fastapi(app)
     logfire.instrument_celery()
     logfire.configure(
@@ -36,12 +35,13 @@ if bool(_app_settings.logfire_token):
         token=_app_settings.logfire_token,
         pydantic_plugin=PydanticPlugin(record='all'),
     )
-    psycopg2.Psycopg2Instrumentor().instrument(skip_dep_check=True)
-    requests.RequestsInstrumentor().instrument()
+    logfire.instrument_psycopg()
+    logfire.instrument_requests()
 
 logging.config.dictConfig(config)
 
 app.include_router(main_router, prefix='')
+app.include_router(cronjob, prefix='')
 
 COMMIT = os.getenv('HEROKU_SLUG_COMMIT', '-')[:7]
 RELEASE_CREATED_AT = os.getenv('HEROKU_RELEASE_CREATED_AT', '-')

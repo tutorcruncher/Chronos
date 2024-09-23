@@ -5,15 +5,17 @@ from datetime import datetime, timedelta
 
 import requests
 from celery.app import Celery
+from fastapi import APIRouter
 from fastapi_utilities import repeat_at
 from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
-from chronos.db import engine, get_session
+from chronos.db import engine
 from chronos.sql_models import Endpoint, WebhookLog
 from chronos.utils import app_logger, settings
 
 session = requests.Session()
+cronjob = APIRouter()
 
 celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.broker_connection_retry_on_startup = True
@@ -99,12 +101,13 @@ def task_send_webhooks(
     )
 
 
+@cronjob.on_event('startup')
 @repeat_at(cron='0 0 * * *')
 async def delete_old_logs_job():
     """
     We run cron job at midnight every day that wipes all WebhookLogs older than 15 days
     """
-    _delete_old_logs_job.delay(get_session())
+    _delete_old_logs_job.delay()
 
 
 @celery_app.task

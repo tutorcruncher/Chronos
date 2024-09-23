@@ -41,6 +41,7 @@ jobs:
     - name: install dependencies
       run: |
         make install
+        make install-test
         pip freeze
     - name: lint
       run: make lint
@@ -52,7 +53,7 @@ jobs:
     - name: codecov
       run: bash <(curl -s https://codecov.io/bash)
       env:
-        CODECOV_TOKEN: 'b7974c62-4f7b-4c9f-8b68-af24bc72a438'
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
 #  deploy:
 #    needs:
