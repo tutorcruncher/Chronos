@@ -1,7 +1,10 @@
 .PHONY: install
 install:
 	pip install -r requirements.txt
-# 	pip install -r tests/requirements.txt
+
+.PHONY: install-test
+install-test:
+	pip install -r tests/requirements.txt
 
 .PHONY: lint
 lint:
@@ -17,7 +20,6 @@ format:
 test:
 	testing=True pytest --cov=chronos
 
-
 .PHONY: reset-db
 reset-db:
 	psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS chronos"
@@ -28,6 +30,7 @@ reset-db:
 
 .PHONY: install-dev
 install-dev:
+	pip install -r tests/requirements.txt
 	pip install -r requirements.txt
 	pip install devtools
 
@@ -41,4 +44,4 @@ run-server:
 
 .PHONY: run-worker
 run-worker:
-	celery -A chronos.worker worker --loglevel=info --autoscale 4,2
+	celery -A chronos.worker worker --loglevel=info --autoscale 4,2 -E
