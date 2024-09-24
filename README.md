@@ -14,7 +14,7 @@ This means the Chronos needs some certain functionality:
 
 * A job that runs periodically deleting all logs older than 15 days
 
-# SetUp
+# SetUp Local
 To set up the Chronos system locally follow these steps:
 
 1. Create a virtual environment
@@ -28,4 +28,30 @@ DEV_MODE = True
 4. Create the DB in Postgres by calling `make reset-db`
 5. Start the server using `make run-server-dev`
 6. Start the celery worker with `make run-worker`
-  
+
+# SetUp a new live system
+To set up the Chronos system in render follow these steps:
+
+1. Create a render project with the following services:
+    * A Postgres database
+    * A Redis database
+    * A web service
+    * A worker service
+2. Setup web service:
+    * Set to build from this repo and deploy from master branch
+    * Set `make install` as the build command
+    * Set `make run-server` as the start command
+3. Setup worker service:
+    * Set to build from this repo and deploy from master branch
+    * Set `make install` as the build command
+    * Set `make run-worker` as the start command
+4. Setup a Postgres instance
+5. Setup a Redis instance
+6. Return to environment variables on web service and set the following:
+    * HOST
+    * PORT
+    * logfire_token
+    * tc2_shared_key
+7. Setup shared environment variables from internally created postgres and redis instance
+    * pg_dsn
+    * redis_url
