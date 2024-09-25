@@ -214,8 +214,6 @@ async def get_logs(
     return {'logs': list_of_webhooks, 'count': count}
 
 
-@main_router.post('/testing', description='Send logs from Chronos to TC')
-async def testing(
-    authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
-):
-    return {'success': True}
+@main_router.get('/', description='Index page for Chronos')
+async def index():
+    return {'Live': True}
