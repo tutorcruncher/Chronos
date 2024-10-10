@@ -1,7 +1,6 @@
 import json
 from typing import Annotated
 
-import requests
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func
@@ -15,7 +14,6 @@ from chronos.utils import settings
 from chronos.worker import task_send_webhooks
 
 main_router = APIRouter()
-session = requests.Session()
 security = HTTPBearer()
 
 
