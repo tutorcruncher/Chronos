@@ -20,11 +20,10 @@ To set up the Chronos system locally follow these steps:
 1. Create a virtual environment
 2. Install the requirements by running `make install-dev`
 3. Create a `.env` file in the root of the project with the following content:
-```
-PG_DSN = "postgresql://postgres:waffle@localhost:5432/chronos"
-TEST_PG_DSN = "postgresql://postgres:waffle@localhost:5432/test_chronos"
-DEV_MODE = True
-```
+
+Set pg_dsn and test_pg_dsn 
+You will need to export dev_mode = True to create tables
+
 4. Create the DB in Postgres by calling `make reset-db`
 5. Start the server using `make run-server-dev`
 6. Start the celery worker with `make run-worker`
