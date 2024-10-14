@@ -62,5 +62,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - run: curl ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-      - run: curl ${{ secrets.RENDER_DEPLOY_HOOK_URL_WORKER }}
+      - name: Deploy to Render
+        run: |
+          curl ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          curl ${{ secrets.RENDER_DEPLOY_HOOK_URL_WORKER }}
