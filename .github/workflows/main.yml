@@ -63,3 +63,4 @@ jobs:
 
     steps:
       - run: curl ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      - run: curl ${{ secrets.RENDER_DEPLOY_HOOK_URL_WORKER }}
