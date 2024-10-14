@@ -59,9 +59,12 @@ def task_send_webhooks(
     total_success, total_failed = 0, 0
     with Session(engine) as db:
         # Get all the endpoints for the branch
-        endpoints_query = select(WebhookEndpoint).where(WebhookEndpoint.branch_id == branch_id)
+        endpoints_query = select(WebhookEndpoint).where(WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active == True)
         endpoints = db.exec(endpoints_query).all()
         for endpoint in endpoints:
+            if not endpoint.webhook_url.startswith('https://'):
+                app_logger.error('Webhook URL does not start with https://: %s (%s)', endpoint.webhook_url, endpoint.id)
+                continue
             # Create sig for the endpoint
             webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(payload).encode(), hashlib.sha256)
             sig_hex = webhook_sig.hexdigest()
