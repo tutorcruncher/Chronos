@@ -205,7 +205,7 @@ class TestWorkers:
     def test_webhook_not_send_if_url_incorrect(
         self, mock_response, db: Session, client: TestClient, celery_session_worker
     ):
-        eps = create_endpoint_from_dft_data(webhook_url='http://example.com')
+        eps = create_endpoint_from_dft_data(webhook_url='htp://example.com')
         for ep in eps:
             db.add(ep)
         db.commit()

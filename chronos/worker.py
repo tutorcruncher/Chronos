@@ -39,9 +39,15 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
     }
     logfire.debug('TutorCruncher request to url: {url=}: {data=}', url=url, data=data)
     with logfire.span('{method=} {url!r}', url=url, method=method):
-        r = session.request(method=method, url=url, json=data, headers=headers)
+        try:
+            r = session.request(method=method, url=url, json=data, headers=headers)
+        except requests.exceptions.RequestException as e:
+            app_logger.error('Error sending webhook to %s: %s', url, e)
     app_logger.info('Request method=%s url=%s status_code=%s', method, url, r.status_code, extra={'data': data})
     return r
+
+
+acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
 
 
 @celery_app.task
@@ -62,8 +68,13 @@ def task_send_webhooks(
         endpoints_query = select(WebhookEndpoint).where(WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active)
         endpoints = db.exec(endpoints_query).all()
         for endpoint in endpoints:
-            if not endpoint.webhook_url.startswith('https://'):
-                app_logger.error('Webhook URL does not start with https://: %s (%s)', endpoint.webhook_url, endpoint.id)
+            # Check if the webhook URL is valid
+            if not endpoint.webhook_url.startswith(acceptable_url_schemes):
+                app_logger.error(
+                    'Webhook URL does not start with an acceptable url scheme: %s (%s)',
+                    endpoint.webhook_url,
+                    endpoint.id,
+                )
                 continue
             # Create sig for the endpoint
             webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(payload).encode(), hashlib.sha256)
