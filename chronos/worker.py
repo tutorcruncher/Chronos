@@ -59,7 +59,7 @@ def task_send_webhooks(
     total_success, total_failed = 0, 0
     with Session(engine) as db:
         # Get all the endpoints for the branch
-        endpoints_query = select(WebhookEndpoint).where(WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active == True)
+        endpoints_query = select(WebhookEndpoint).where(WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active)
         endpoints = db.exec(endpoints_query).all()
         for endpoint in endpoints:
             if not endpoint.webhook_url.startswith('https://'):

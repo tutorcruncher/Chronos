@@ -17,6 +17,7 @@ from tests.test_helpers import (
     get_successful_response,
 )
 
+
 class TestWorkers:
     @pytest.fixture
     def create_tables(self, engine):
@@ -182,9 +183,7 @@ class TestWorkers:
         assert webhook.status_code == 409
 
     @patch('chronos.worker.session.request')
-    def test_webhook_not_send_if_active(
-            self, mock_response, db: Session, client: TestClient, celery_session_worker
-    ):
+    def test_webhook_not_send_if_active(self, mock_response, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data(active=False)
         for ep in eps:
             db.add(ep)
@@ -199,12 +198,12 @@ class TestWorkers:
 
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_response.called == False
+        assert not mock_response.called
         assert not len(webhooks)
 
     @patch('chronos.worker.session.request')
     def test_webhook_not_send_if_url_incorrect(
-            self, mock_response, db: Session, client: TestClient, celery_session_worker
+        self, mock_response, db: Session, client: TestClient, celery_session_worker
     ):
         eps = create_endpoint_from_dft_data(webhook_url='http://example.com')
         for ep in eps:
@@ -220,9 +219,8 @@ class TestWorkers:
 
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_response.called == False
+        assert not mock_response.called
         assert not len(webhooks)
-
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()
@@ -245,6 +243,3 @@ class TestWorkers:
         logs = db.exec(select(WebhookLog)).all()
         # The log from 15 days ago is seconds older than the check and thus doesn't get deleted
         assert len(logs) == 16
-
-
-
