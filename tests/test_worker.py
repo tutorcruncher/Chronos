@@ -182,6 +182,46 @@ class TestWorkers:
         assert webhook.status == 'Unexpected response'
         assert webhook.status_code == 409
 
+    @patch('chronos.worker.session.request')
+    def test_webhook_not_send_if_active(self, mock_response, db: Session, client: TestClient, celery_session_worker):
+        eps = create_endpoint_from_dft_data(active=False)
+        for ep in eps:
+            db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
+        mock_response.return_value = get_failed_response(payload, headers)
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
+
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert not mock_response.called
+        assert not len(webhooks)
+
+    @patch('chronos.worker.session.request')
+    def test_webhook_not_send_if_url_incorrect(
+        self, mock_response, db: Session, client: TestClient, celery_session_worker
+    ):
+        eps = create_endpoint_from_dft_data(webhook_url='http://example.com')
+        for ep in eps:
+            db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
+        mock_response.return_value = get_failed_response(payload, headers)
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
+
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert not mock_response.called
+        assert not len(webhooks)
+
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()
         for ep in eps:
