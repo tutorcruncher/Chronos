@@ -44,7 +44,7 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
         try:
             r = session.request(method=method, url=url, json=data, headers=headers)
         except requests.exceptions.HTTPError as httperr:
-            app_logger.info('HTTPError sending webhook to %s: %s', url, httperr)
+            app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
         except requests.exceptions.ConnectionError as conerr:
             app_logger.info('Connection error sending webhook to %s: %s', url, conerr)
         except requests.exceptions.Timeout as terr:
@@ -86,6 +86,7 @@ def task_send_webhooks(
         # Get all the endpoints for the branch
         endpoints_query = select(WebhookEndpoint).where(WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active)
         endpoints = db.exec(endpoints_query).all()
+        debug('fuuuck')
         for endpoint in endpoints:
             # Check if the webhook URL is valid
             if not endpoint.webhook_url.startswith(acceptable_url_schemes):
@@ -108,14 +109,12 @@ def task_send_webhooks(
             if not webhook_sent:
                 app_logger.error('No response from endpoint %s: %s', endpoint.id, endpoint.webhook_url)
 
+            if response.status_code in {200, 201, 202, 204}:
+                status = 'Success'
+                total_success += 1
             else:
-                # Define status display and count the successful and failed webhooks
-                if response.status_code in {200, 201, 202, 204}:
-                    status = 'Success'
-                    total_success += 1
-                else:
-                    status = 'Unexpected response'
-                    total_failed += 1
+                status = 'Unexpected response'
+                total_failed += 1
 
             # Log the response
             webhooklog = WebhookLog(
