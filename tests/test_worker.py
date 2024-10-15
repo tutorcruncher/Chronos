@@ -226,7 +226,7 @@ class TestWorkers:
     @patch('chronos.worker.app_logger')
     @patch('chronos.worker.session.request')
     def test_webhook_not_send_if_not_url(
-            self, mock_response,mock_logger, db: Session, client: TestClient, celery_session_worker
+        self, mock_response, mock_logger, db: Session, client: TestClient, celery_session_worker
     ):
         eps = create_endpoint_from_dft_data(webhook_url='')
         for ep in eps:
@@ -251,7 +251,7 @@ class TestWorkers:
     @patch('chronos.worker.app_logger')
     @patch('chronos.worker.session.request')
     def test_webhook_not_send_errors(
-            self, mock_response, mock_logger, db: Session, client: TestClient, celery_session_worker
+        self, mock_response, mock_logger, db: Session, client: TestClient, celery_session_worker
     ):
         eps = create_endpoint_from_dft_data()
         for ep in eps:
@@ -300,7 +300,6 @@ class TestWorkers:
         assert 'Timeout error sending webhook to' in mock_logger.info.call_args_list[6][0][0]
         assert mock_response.call_count == 4
         assert len(webhooks) == 4
-
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()

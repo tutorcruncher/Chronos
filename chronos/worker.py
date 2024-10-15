@@ -86,7 +86,6 @@ def task_send_webhooks(
         # Get all the endpoints for the branch
         endpoints_query = select(WebhookEndpoint).where(WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active)
         endpoints = db.exec(endpoints_query).all()
-        debug('fuuuck')
         for endpoint in endpoints:
             # Check if the webhook URL is valid
             if not endpoint.webhook_url.startswith(acceptable_url_schemes):
