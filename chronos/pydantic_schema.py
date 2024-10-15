@@ -1,4 +1,3 @@
-import json
 from typing import Any
 
 from pydantic import BaseModel
@@ -51,6 +50,6 @@ class RequestData(BaseModel):
 
     request_headers: str
     request_body: str
-    response_headers: str = '"{"Message": "No response from endpoint"}"'
-    response_body: str = '"{"Message": "No response from endpoint"}"'
+    response_headers: str = '{"Message": "No response from endpoint"}'
+    response_body: str = '{"Message": "No response from endpoint"}'
     status_code: int = 999
