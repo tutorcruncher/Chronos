@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+import requests.exceptions
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
@@ -221,6 +222,84 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert not mock_response.called
         assert not len(webhooks)
+
+    @patch('chronos.worker.app_logger')
+    @patch('chronos.worker.session.request')
+    def test_webhook_not_send_if_not_url(
+        self, mock_response, mock_logger, db: Session, client: TestClient, celery_session_worker
+    ):
+        eps = create_endpoint_from_dft_data(webhook_url='')
+        for ep in eps:
+            db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
+        mock_response.return_value = get_failed_response(payload, headers)
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
+        assert not mock_logger.error.called
+
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert mock_logger.error.called
+        assert 'Webhook URL does not start with an acceptable url scheme:' in mock_logger.error.call_args[0][0]
+        assert not mock_response.called
+        assert not len(webhooks)
+
+    @patch('chronos.worker.app_logger')
+    @patch('chronos.worker.session.request')
+    def test_webhook_not_send_errors(
+        self, mock_response, mock_logger, db: Session, client: TestClient, celery_session_worker
+    ):
+        eps = create_endpoint_from_dft_data()
+        for ep in eps:
+            db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
+        assert not mock_logger.info.called
+
+        mock_response.side_effect = requests.exceptions.RequestException()
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert mock_logger.info.call_count == 2
+        assert 'Request error sending webhook to' in mock_logger.info.call_args_list[0][0][0]
+        assert mock_response.call_count == 1
+        assert len(webhooks) == 1
+
+        webhook = webhooks[0]
+        assert webhook.status == 'Unexpected response'
+        assert webhook.status_code == 999
+        assert webhook.response_body == '{"Message": "No response from endpoint"}'
+        assert webhook.response_headers == '{"Message": "No response from endpoint"}'
+
+        mock_response.side_effect = requests.exceptions.HTTPError()
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert mock_logger.info.call_count == 4
+        assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[2][0][0]
+        assert mock_response.call_count == 2
+        assert len(webhooks) == 2
+
+        mock_response.side_effect = requests.exceptions.ConnectionError()
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert mock_logger.info.call_count == 6
+        assert 'Connection error sending webhook to' in mock_logger.info.call_args_list[4][0][0]
+        assert mock_response.call_count == 3
+        assert len(webhooks) == 3
+
+        mock_response.side_effect = requests.exceptions.Timeout()
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert mock_logger.info.call_count == 8
+        assert 'Timeout error sending webhook to' in mock_logger.info.call_args_list[6][0][0]
+        assert mock_response.call_count == 4
+        assert len(webhooks) == 4
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()

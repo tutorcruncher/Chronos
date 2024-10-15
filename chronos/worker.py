@@ -11,6 +11,7 @@ from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
 from chronos.db import engine
+from chronos.pydantic_schema import RequestData
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import app_logger, settings
 
@@ -39,12 +40,30 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
     }
     logfire.debug('TutorCruncher request to url: {url=}: {data=}', url=url, data=data)
     with logfire.span('{method=} {url!r}', url=url, method=method):
+        r = None
         try:
             r = session.request(method=method, url=url, json=data, headers=headers)
-        except requests.exceptions.RequestException as e:
-            app_logger.error('Error sending webhook to %s: %s', url, e)
-    app_logger.info('Request method=%s url=%s status_code=%s', method, url, r.status_code, extra={'data': data})
-    return r
+        except requests.exceptions.HTTPError as httperr:
+            app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
+        except requests.exceptions.ConnectionError as conerr:
+            app_logger.info('Connection error sending webhook to %s: %s', url, conerr)
+        except requests.exceptions.Timeout as terr:
+            app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
+        except requests.exceptions.RequestException as rerr:
+            app_logger.info('Request error sending webhook to %s: %s', url, rerr)
+        else:
+            app_logger.info('Request method=%s url=%s status_code=%s', method, url, r.status_code, extra={'data': data})
+
+    request_data = RequestData(request_headers=json.dumps(headers), request_body=json.dumps(data))
+    if r is None:
+        webhook_was_received = False
+    else:
+        request_data.response_headers = json.dumps(dict(r.headers))
+        request_data.response_body = json.dumps(r.content.decode())
+        request_data.status_code = r.status_code
+        webhook_was_received = True
+
+    return request_data, webhook_was_received
 
 
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
@@ -84,9 +103,11 @@ def task_send_webhooks(
             if url_extension:
                 url += f'/{url_extension}'
             # Send the Webhook to the endpoint
-            response = webhook_request(url, webhook_sig=sig_hex, data=loaded_payload)
+            response, webhook_sent = webhook_request(url, webhook_sig=sig_hex, data=loaded_payload)
 
-            # Define status display and count the successful and failed webhooks
+            if not webhook_sent:
+                app_logger.error('No response from endpoint %s: %s', endpoint.id, endpoint.webhook_url)
+
             if response.status_code in {200, 201, 202, 204}:
                 status = 'Success'
                 total_success += 1
@@ -97,10 +118,10 @@ def task_send_webhooks(
             # Log the response
             webhooklog = WebhookLog(
                 webhook_endpoint_id=endpoint.id,
-                request_headers=json.dumps(dict(response.request.headers)),
-                request_body=json.dumps(response.request.body.decode()),
-                response_headers=json.dumps(dict(response.headers)),
-                response_body=json.dumps(response.content.decode()),
+                request_headers=response.request_headers,
+                request_body=response.request_body,
+                response_headers=response.response_headers,
+                response_body=response.response_body,
                 status=status,
                 status_code=response.status_code,
             )
