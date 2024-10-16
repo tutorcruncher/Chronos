@@ -4,6 +4,7 @@ docutils~=0.21
 fastapi~=0.115.2
 fastapi_utilities~=0.2.0
 filelock~=3.16.1
+httpx~=0.27.2
 logfire~=1.1.0
 logfire[fastapi, requests, psycopg2, celery]~=1.1.0
 pillow~=11.0.0
