@@ -10,11 +10,11 @@ class Settings(BaseSettings):
     # Dev and Test settings
     testing: bool = False
     dev_mode: bool = False
-    log_level: str = 'INFO'
+    log_level: str = 'ERROR'
     on_beta: bool = False
 
     logfire_token: Optional[str] = None
-    logfire_ignore_no_config: int = 1
+    logfire_log_level: str = 'all'
 
     # Postgres
     pg_dsn: str = 'postgresql://postgres:postgres@localhost:5432/chronos'

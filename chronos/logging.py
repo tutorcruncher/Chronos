@@ -6,9 +6,13 @@ config = {
     'version': 1,
     'disable_existing_loggers': False,
     'formatters': {
-        'default': {'()': 'uvicorn.logging.DefaultFormatter', 'fmt': '%(levelprefix)s %(message)s', 'use_colors': None},
+        'default': {
+            'defaults': 'uvicorn.logging.DefaultFormatter',
+            'fmt': '%(levelprefix)s %(message)s',
+            'use_colors': None,
+        },
         'access': {
-            '()': 'uvicorn.logging.AccessFormatter',
+            'defaults': 'uvicorn.logging.AccessFormatter',
             'fmt': "%(levelprefix)s %(client_addr)s - '%(request_line)s' %(status_code)s",  # noqa: E501
         },
     },
