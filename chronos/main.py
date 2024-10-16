@@ -4,7 +4,6 @@ import os
 import logfire
 import sentry_sdk
 from fastapi import FastAPI
-from logfire import PydanticPlugin
 from starlette.middleware.cors import CORSMiddleware
 
 from chronos.logging import config
@@ -33,13 +32,15 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=
 
 
 if bool(_app_settings.logfire_token):
+    logfire.configure(
+        service_name='chronos',
+        token=_app_settings.logfire_token,
+        send_to_logfire=True,
+        console=False,
+    )
     logfire.instrument_fastapi(app)
     logfire.instrument_celery()
-    logfire.configure(
-        send_to_logfire=True,
-        token=_app_settings.logfire_token,
-        pydantic_plugin=PydanticPlugin(record='all'),
-    )
+    logfire.instrument_pydantic(record=_app_settings.logfire_log_level)
     logfire.instrument_psycopg()
     logfire.instrument_requests()
 
@@ -47,7 +48,3 @@ logging.config.dictConfig(config)
 
 app.include_router(main_router, prefix='')
 app.include_router(cronjob, prefix='')
-
-COMMIT = os.getenv('HEROKU_SLUG_COMMIT', '-')[:7]
-RELEASE_CREATED_AT = os.getenv('HEROKU_RELEASE_CREATED_AT', '-')
-# logfire.info('starting app {commit=} {release_created_at=}', commit=COMMIT, release_created_at=RELEASE_CREATED_AT)
