@@ -49,21 +49,21 @@ class TCPublicProfileWebhook(BaseModel):
     Pydantic model for the TCPublicProfileWebhook. This is the payload from for the public profile endpoint
     """
 
-    id = int
-    deleted = bool
-    first_name = str
-    last_name = str
-    town = str
-    country = str
-    review_rating = float
-    review_duration = int
-    location = dict
-    photo = str
-    extra_attributes = list
-    skills = list
-    labels = list
-    created = str
-    release_timestamp = str
+    id: int
+    deleted: bool
+    first_name: str
+    last_name: str
+    town: str
+    country: str
+    review_rating: float
+    review_duration: int
+    location: dict
+    photo: str
+    extra_attributes: list
+    skills: list
+    labels: list
+    created: str
+    release_timestamp: str
     request_time: int = Field(alias='_request_time')
 
 
