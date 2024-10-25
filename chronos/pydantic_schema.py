@@ -48,7 +48,6 @@ class TCPublicProfileWebhook(BaseModel):
     Pydantic model for the TCPublicProfileWebhook. This is the payload from for the public profile endpoint
     """
 
-
     id = int
     deleted = bool
     first_name = str

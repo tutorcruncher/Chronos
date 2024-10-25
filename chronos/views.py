@@ -1,5 +1,5 @@
 import json
-from typing import Annotated
+from typing import Annotated, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -8,7 +8,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
 from chronos.db import get_session
-from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCWebhook
+from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCWebhook, TCPublicProfileWebhook
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import settings
 from chronos.worker import task_send_webhooks
@@ -28,7 +28,7 @@ def check_authorisation(authorisation: HTTPAuthorizationCredentials):
 
 
 def send_webhooks(
-    webhook: TCWebhook,
+    webhook: TCWebhook | TCPublicProfileWebhook,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
     url_extension: str = None,
 ) -> dict:
@@ -48,7 +48,7 @@ def send_webhooks(
     description='Receive webhooks from TC and send them to the relevant endpoints',
 )
 async def send_webhook_with_extension(
-    webhook: TCWebhook,
+    webhook: TCPublicProfileWebhook,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
     url_extension: str = None,
 ) -> dict:
