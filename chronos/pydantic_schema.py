@@ -43,6 +43,7 @@ class TCWebhook(BaseModel):
     events: list[dict[str, Any]]
     request_time: int
 
+
 class TCPublicProfileWebhook(BaseModel):
     """
     Pydantic model for the TCPublicProfileWebhook. This is the payload from for the public profile endpoint
@@ -64,7 +65,6 @@ class TCPublicProfileWebhook(BaseModel):
     created = str
     release_timestamp = str
     request_time: int = Field(alias='_request_time')
-
 
 
 class RequestData(BaseModel):

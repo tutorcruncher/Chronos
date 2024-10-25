@@ -1,5 +1,5 @@
 import json
-from typing import Annotated, Union
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -8,7 +8,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
 from chronos.db import get_session
-from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCWebhook, TCPublicProfileWebhook
+from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCPublicProfileWebhook, TCWebhook
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import settings
 from chronos.worker import task_send_webhooks
