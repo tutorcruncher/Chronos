@@ -1,6 +1,7 @@
 from typing import Any
 
 from pydantic import BaseModel
+from pydantic.fields import Field
 
 
 class TCIntegration(BaseModel):
@@ -41,6 +42,30 @@ class TCWebhook(BaseModel):
 
     events: list[dict[str, Any]]
     request_time: int
+
+class TCPublicProfileWebhook(BaseModel):
+    """
+    Pydantic model for the TCPublicProfileWebhook. This is the payload from for the public profile endpoint
+    """
+
+
+    id = int
+    deleted = bool
+    first_name = str
+    last_name = str
+    town = str
+    country = str
+    review_rating = float
+    review_duration = int
+    location = dict
+    photo = str
+    extra_attributes = list
+    skills = list
+    labels = list
+    created = str
+    release_timestamp = str
+    request_time: int = Field(alias='_request_time')
+
 
 
 class RequestData(BaseModel):
