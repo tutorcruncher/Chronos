@@ -20,3 +20,4 @@ setuptools~=75.1.0
 SQLAlchemy~=2.0.36
 sqlmodel~=0.0.22
 starlette~=0.40.0
+uvicorn~=0.32.0
