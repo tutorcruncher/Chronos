@@ -42,7 +42,7 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
     with logfire.span('{method=} {url!r}', url=url, method=method):
         r = None
         try:
-            r = session.request(method=method, url=url, json=data, headers=headers)
+            r = session.request(method=method, url=url, json=data, headers=headers, timeout=5)
         except requests.exceptions.HTTPError as httperr:
             app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
         except requests.exceptions.ConnectionError as conerr:
@@ -69,6 +69,19 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
 
 
+def get_qlength():
+    """
+    Get the length of the queue from celery. Celery returns a dictionary like so: {'queue_name': [task1, task2, ...]}
+    so to get qlength we simply aggregate the length of all task lists
+    """
+    qlength = 0
+    celery_inspector = celery_app.control.inspect()
+    dict_of_queues = celery_inspector.reserved()
+    for k, v in dict_of_queues.items():
+        qlength += len(v)
+    return qlength
+
+
 @celery_app.task
 def task_send_webhooks(
     payload: str,
@@ -80,6 +93,14 @@ def task_send_webhooks(
     loaded_payload = json.loads(payload)
     loaded_payload['_request_time'] = loaded_payload.pop('request_time')
     branch_id = loaded_payload['events'][0]['branch']
+
+    qlength = get_qlength()
+    app_logger.info(
+        'Starting send webhook task for branch %s. Queued=%s. Active=%s.',
+        branch_id,
+    )
+    if qlength > 100:
+        app_logger.error('Queue is too long. Check workers and speeds.')
 
     total_success, total_failed = 0, 0
     with Session(engine) as db:
