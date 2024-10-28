@@ -96,11 +96,7 @@ def task_send_webhooks(
     branch_id = loaded_payload['events'][0]['branch']
 
     qlength = get_qlength()
-    app_logger.info(
-        'Starting send webhook task for branch %s. qlength=%s.',
-        branch_id,
-        qlength
-    )
+    app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
     if qlength > 100:
         app_logger.error('Queue is too long. Check workers and speeds.')
 
