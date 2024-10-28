@@ -266,8 +266,8 @@ class TestWorkers:
         mock_response.side_effect = requests.exceptions.RequestException()
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_logger.info.call_count == 2
-        assert 'Request error sending webhook to' in mock_logger.info.call_args_list[0][0][0]
+        assert mock_logger.info.call_count == 3
+        assert 'Request error sending webhook to' in mock_logger.info.call_args_list[1][0][0]
         assert mock_response.call_count == 1
         assert len(webhooks) == 1
 
@@ -280,24 +280,24 @@ class TestWorkers:
         mock_response.side_effect = requests.exceptions.HTTPError()
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_logger.info.call_count == 4
-        assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[2][0][0]
+        assert mock_logger.info.call_count == 6
+        assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[4][0][0]
         assert mock_response.call_count == 2
         assert len(webhooks) == 2
 
         mock_response.side_effect = requests.exceptions.ConnectionError()
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_logger.info.call_count == 6
-        assert 'Connection error sending webhook to' in mock_logger.info.call_args_list[4][0][0]
+        assert mock_logger.info.call_count == 9
+        assert 'Connection error sending webhook to' in mock_logger.info.call_args_list[7][0][0]
         assert mock_response.call_count == 3
         assert len(webhooks) == 3
 
         mock_response.side_effect = requests.exceptions.Timeout()
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_logger.info.call_count == 8
-        assert 'Timeout error sending webhook to' in mock_logger.info.call_args_list[6][0][0]
+        assert mock_logger.info.call_count == 12
+        assert 'Timeout error sending webhook to' in mock_logger.info.call_args_list[10][0][0]
         assert mock_response.call_count == 4
         assert len(webhooks) == 4
 
