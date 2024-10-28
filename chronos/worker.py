@@ -77,8 +77,9 @@ def get_qlength():
     qlength = 0
     celery_inspector = celery_app.control.inspect()
     dict_of_queues = celery_inspector.reserved()
-    for k, v in dict_of_queues.items():
-        qlength += len(v)
+    if dict_of_queues and isinstance(dict_of_queues, dict):
+        for k, v in dict_of_queues.items():
+            qlength += len(v)
     return qlength
 
 
@@ -96,8 +97,9 @@ def task_send_webhooks(
 
     qlength = get_qlength()
     app_logger.info(
-        'Starting send webhook task for branch %s. Queued=%s. Active=%s.',
+        'Starting send webhook task for branch %s. qlength=%s.',
         branch_id,
+        qlength
     )
     if qlength > 100:
         app_logger.error('Queue is too long. Check workers and speeds.')
