@@ -267,7 +267,7 @@ class TestWorkers:
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 3
-        assert 'Request error sending webhook to' in mock_logger.info.call_args_list[0][0][0]
+        assert 'Request error sending webhook to' in mock_logger.info.call_args_list[1][0][0]
         assert mock_response.call_count == 1
         assert len(webhooks) == 1
 
@@ -281,7 +281,7 @@ class TestWorkers:
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 6
-        assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[2][0][0]
+        assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[4][0][0]
         assert mock_response.call_count == 2
         assert len(webhooks) == 2
 
@@ -289,7 +289,7 @@ class TestWorkers:
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 9
-        assert 'Connection error sending webhook to' in mock_logger.info.call_args_list[4][0][0]
+        assert 'Connection error sending webhook to' in mock_logger.info.call_args_list[7][0][0]
         assert mock_response.call_count == 3
         assert len(webhooks) == 3
 
@@ -297,7 +297,7 @@ class TestWorkers:
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 12
-        assert 'Timeout error sending webhook to' in mock_logger.info.call_args_list[6][0][0]
+        assert 'Timeout error sending webhook to' in mock_logger.info.call_args_list[10][0][0]
         assert mock_response.call_count == 4
         assert len(webhooks) == 4
 
