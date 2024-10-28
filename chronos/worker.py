@@ -42,7 +42,7 @@ def webhook_request(url: str, *, method: str = 'POST', webhook_sig: str, data: d
     with logfire.span('{method=} {url!r}', url=url, method=method):
         r = None
         try:
-            r = session.request(method=method, url=url, json=data, headers=headers, timeout=5)
+            r = session.request(method=method, url=url, json=data, headers=headers, timeout=4)
         except requests.exceptions.HTTPError as httperr:
             app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
         except requests.exceptions.ConnectionError as conerr:
@@ -125,7 +125,7 @@ def task_send_webhooks(
             response, webhook_sent = webhook_request(url, webhook_sig=sig_hex, data=loaded_payload)
 
             if not webhook_sent:
-                app_logger.error('No response from endpoint %s: %s', endpoint.id, endpoint.webhook_url)
+                app_logger.info('No response from endpoint %s: %s', endpoint.id, endpoint.webhook_url)
 
             if response.status_code in {200, 201, 202, 204}:
                 status = 'Success'
