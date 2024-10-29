@@ -21,3 +21,4 @@ SQLAlchemy~=2.0.36
 sqlmodel~=0.0.22
 starlette~=0.41.2
 uvicorn~=0.32.0
+respx~=0.21.1

@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 import requests.exceptions
+import respx as respx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
@@ -31,15 +32,15 @@ class TestWorkers:
         with Session(engine) as session:
             yield session
 
-    @patch('chronos.worker.session.request')
-    def test_send_webhook_one(self, mock_response, db: Session, client: TestClient, celery_session_worker):
+    @respx.mock
+    def test_send_webhook_one(self, db: Session, client: TestClient, celery_session_worker):
         ep = create_endpoint_from_dft_data()[0]
         db.add(ep)
         db.commit()
 
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        mock_response.return_value = get_successful_response(payload, headers)
+        mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
 
         endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 1
@@ -49,6 +50,7 @@ class TestWorkers:
 
         sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
+        assert mock_request.called
 
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 1
@@ -57,13 +59,16 @@ class TestWorkers:
         assert webhook.status == 'Success'
         assert webhook.status_code == 200
 
-    @patch('chronos.worker.session.request')
-    def test_send_many_endpoints(self, mock_response, db: Session, client: TestClient, celery_session_worker):
+    @respx.mock
+    def test_send_many_endpoints(self, db: Session, client: TestClient, celery_session_worker):
         endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 0
 
         eps = create_endpoint_from_dft_data(count=10)
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
         for ep in eps:
+            mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
             db.add(ep)
         db.commit()
 
@@ -73,17 +78,14 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
 
-        payload = get_dft_webhook_data()
-        headers = _get_webhook_headers()
-        mock_response.return_value = get_successful_response(payload, headers)
-
         sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
+        assert mock_request.called
 
-    @patch('chronos.worker.session.request')
-    def test_send_correct_branch(self, mock_response, db: Session, client: TestClient, celery_session_worker):
+    @respx.mock
+    def test_send_correct_branch(self, db: Session, client: TestClient, celery_session_worker):
         endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 0
 
@@ -110,7 +112,7 @@ class TestWorkers:
 
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        mock_response.return_value = get_successful_response(payload, headers)
+        mock_request = respx.post(endpoints[0].webhook_url).mock(return_value=get_successful_response(payload, headers))
 
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
@@ -119,6 +121,7 @@ class TestWorkers:
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 5
+        assert len(mock_request.calls) == 5
 
         webhooks = db.exec(
             select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_1]))
@@ -137,12 +140,13 @@ class TestWorkers:
 
         payload = get_dft_webhook_data(branch_id=199)
         headers = _get_webhook_headers()
-        mock_response.return_value = get_successful_response(payload, headers)
+        mock_request.return_value = get_successful_response(payload, headers)
 
         sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
+        assert len(mock_request.calls) == 10
 
         webhooks = db.exec(
             select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_1]))
@@ -159,18 +163,15 @@ class TestWorkers:
         ).all()
         assert len(webhooks) == 0
 
-    @patch('chronos.worker.session.request')
-    def test_send_webhook_fail_to_send_only_one(
-        self, mock_response, db: Session, client: TestClient, celery_session_worker
-    ):
+    @respx.mock
+    def test_send_webhook_fail_to_send_only_one(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()
-        for ep in eps:
-            db.add(ep)
-        db.commit()
-
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        mock_response.return_value = get_failed_response(payload, headers)
+        for ep in eps:
+            mock_request = respx.post(ep.webhook_url).mock(return_value=get_failed_response(payload, headers))
+            db.add(ep)
+        db.commit()
 
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
@@ -178,28 +179,28 @@ class TestWorkers:
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 1
+        assert mock_request.called
 
         webhook = webhooks[0]
         assert webhook.status == 'Unexpected response'
         assert webhook.status_code == 409
 
-    @patch('chronos.worker.session.request')
-    def test_webhook_not_send_if_active(self, mock_response, db: Session, client: TestClient, celery_session_worker):
+    @respx.mock
+    def test_webhook_not_send_if_active(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data(active=False)
-        for ep in eps:
-            db.add(ep)
-        db.commit()
-
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        mock_response.return_value = get_failed_response(payload, headers)
+        for ep in eps:
+            mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+            db.add(ep)
+        db.commit()
 
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
 
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert not mock_response.called
+        assert not mock_request.called
         assert not len(webhooks)
 
     @patch('chronos.worker.session.request')
@@ -249,10 +250,8 @@ class TestWorkers:
         assert not len(webhooks)
 
     @patch('chronos.worker.app_logger')
-    @patch('chronos.worker.session.request')
-    def test_webhook_not_send_errors(
-        self, mock_response, mock_logger, db: Session, client: TestClient, celery_session_worker
-    ):
+    @respx.mock
+    def test_webhook_not_send_errors(self, mock_logger, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()
         for ep in eps:
             db.add(ep)
@@ -263,12 +262,12 @@ class TestWorkers:
         assert len(webhooks) == 0
         assert not mock_logger.info.called
 
-        mock_response.side_effect = requests.exceptions.RequestException()
+        mock_request = respx.post(eps[0].webhook_url).mock(side_effect=requests.exceptions.RequestException())
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 4
         assert 'Request error sending webhook to' in mock_logger.info.call_args_list[1][0][0]
-        assert mock_response.call_count == 1
+        assert mock_request.call_count == 1
         assert len(webhooks) == 1
 
         webhook = webhooks[0]
@@ -277,28 +276,28 @@ class TestWorkers:
         assert webhook.response_body == '{"Message": "No response from endpoint"}'
         assert webhook.response_headers == '{"Message": "No response from endpoint"}'
 
-        mock_response.side_effect = requests.exceptions.HTTPError()
+        mock_request = respx.post(eps[0].webhook_url).mock(side_effect=requests.exceptions.HTTPError())
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 8
         assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[5][0][0]
-        assert mock_response.call_count == 2
+        assert mock_request.call_count == 2
         assert len(webhooks) == 2
 
-        mock_response.side_effect = requests.exceptions.ConnectionError()
+        mock_request = respx.post(eps[0].webhook_url).mock(side_effect=requests.exceptions.ConnectionError())
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 12
         assert 'Connection error sending webhook to' in mock_logger.info.call_args_list[9][0][0]
-        assert mock_response.call_count == 3
+        assert mock_request.call_count == 3
         assert len(webhooks) == 3
 
-        mock_response.side_effect = requests.exceptions.Timeout()
+        mock_request = respx.post(eps[0].webhook_url).mock(side_effect=requests.exceptions.Timeout())
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 16
         assert 'Timeout error sending webhook to' in mock_logger.info.call_args_list[13][0][0]
-        assert mock_response.call_count == 4
+        assert mock_request.call_count == 4
         assert len(webhooks) == 4
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
