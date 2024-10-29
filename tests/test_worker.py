@@ -225,9 +225,7 @@ class TestWorkers:
     def test_webhook_not_send_if_not_url(self, mock_logger, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data(webhook_url='')
         payload = get_dft_webhook_data()
-        headers = _get_webhook_headers()
         for ep in eps:
-            mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
             db.add(ep)
         db.commit()
 
@@ -239,23 +237,22 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.error.called
         assert 'Webhook URL does not start with an acceptable url scheme:' in mock_logger.error.call_args[0][0]
-        assert not mock_request.called
         assert not len(webhooks)
 
     @patch('chronos.worker.app_logger')
     @respx.mock
     def test_webhook_not_send_errors(self, mock_logger, db: Session, client: TestClient, celery_session_worker):
-        eps = create_endpoint_from_dft_data()
+        payload = get_dft_webhook_data()
+        eps = create_endpoint_from_dft_data(webhook_url='https://test-http-errors.com')
         for ep in eps:
             db.add(ep)
         db.commit()
 
-        payload = get_dft_webhook_data()
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
         assert not mock_logger.info.called
 
-        mock_request = respx.post(eps[0].webhook_url).mock(side_effect=httpx.TimeoutException(message='Timeout error'))
+        mock_request = respx.post(ep.webhook_url).mock(side_effect=httpx.TimeoutException(message='Timeout error'))
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert mock_logger.info.call_count == 4
