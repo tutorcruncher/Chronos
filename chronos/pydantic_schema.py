@@ -72,6 +72,7 @@ class RequestData(BaseModel):
     Pydantic model for the RequestData object
     """
 
+    endpoint_id: int
     request_headers: str
     request_body: str
     response_headers: str = '{"Message": "No response from endpoint"}'

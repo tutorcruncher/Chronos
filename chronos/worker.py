@@ -24,7 +24,7 @@ celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_
 celery_app.conf.broker_connection_retry_on_startup = True
 
 
-async def webhook_request(client: AsyncClient, url: str, *, webhook_sig: str, data: dict = None):
+async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, webhook_sig: str, data: dict = None):
     """
     Send a request to TutorCruncher
     :param client
@@ -57,7 +57,9 @@ async def webhook_request(client: AsyncClient, url: str, *, webhook_sig: str, da
         else:
             app_logger.info('Request method=%s url=%s status_code=%s', 'POST', url, r.status_code, extra={'data': data})
 
-    request_data = RequestData(request_headers=json.dumps(headers), request_body=json.dumps(data))
+    request_data = RequestData(
+        endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=json.dumps(data)
+    )
     if r is not None:
         request_data.response_headers = json.dumps(dict(r.headers))
         request_data.response_body = json.dumps(r.content.decode())
@@ -107,7 +109,9 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
             # Send the Webhook to the endpoint
 
             loaded_payload = json.loads(payload)
-            task = asyncio.ensure_future(webhook_request(client, url, webhook_sig=sig_hex, data=loaded_payload))
+            task = asyncio.ensure_future(
+                webhook_request(client, url, endpoint.id, webhook_sig=sig_hex, data=loaded_payload)
+            )
             tasks.append(task)
         webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
         for response in webhook_responses:
@@ -127,7 +131,7 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
             # Log the response
             webhook_logs.append(
                 WebhookLog(
-                    webhook_endpoint_id=endpoint.id,
+                    webhook_endpoint_id=response.endpoint_id,
                     request_headers=response.request_headers,
                     request_body=response.request_body,
                     response_headers=response.response_headers,
