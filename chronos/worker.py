@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 
 import httpx
 import logfire
-import requests
 from celery.app import Celery
 from fastapi import APIRouter
 from fastapi_utilities import repeat_at
@@ -19,7 +18,6 @@ from chronos.pydantic_schema import RequestData
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import app_logger, settings
 
-session = requests.Session()
 cronjob = APIRouter()
 
 celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_url)
@@ -46,16 +44,11 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
     with logfire.span('{method=} {url!r}', url=url, method='POST'):
         r = None
         try:
-            r = await client.post(url=url, json=data, headers=headers, timeout=4)
-        except requests.exceptions.HTTPError as httperr:
-            app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
-        except requests.exceptions.ConnectionError as conerr:
-            app_logger.info('Connection error sending webhook to %s: %s', url, conerr)
-        except requests.exceptions.Timeout as terr:
+            r = await client.post(url=url, json=data, headers=headers, timeout=8)
+        except httpx.TimeoutException as terr:
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
-        except requests.exceptions.RequestException as rerr:
-            app_logger.info('Request error sending webhook to %s: %s', url, rerr)
-
+        except httpx.HTTPError as httperr:
+            app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
     request_data = RequestData(
         endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=json.dumps(data)
     )
