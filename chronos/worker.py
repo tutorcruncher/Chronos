@@ -49,7 +49,6 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
         except httpx.HTTPError as httperr:
             app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
-
     request_data = RequestData(
         endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=json.dumps(data)
     )
