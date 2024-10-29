@@ -4,6 +4,8 @@ import hmac
 import json
 from datetime import datetime, timedelta
 
+import httpx
+import logfire
 import requests
 from celery.app import Celery
 from fastapi import APIRouter
@@ -41,7 +43,6 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
         'Content-Type': 'application/json',
         'webhook-signature': webhook_sig,
     }
-    logfire.debug('TutorCruncher request to url: {url=}: {data=}', url=url, data=data)
     with logfire.span('{method=} {url!r}', url=url, method='POST'):
         r = None
         try:
@@ -54,8 +55,6 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
         except requests.exceptions.RequestException as rerr:
             app_logger.info('Request error sending webhook to %s: %s', url, rerr)
-        else:
-            app_logger.info('Request method=%s url=%s status_code=%s', 'POST', url, r.status_code, extra={'data': data})
 
     request_data = RequestData(
         endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=json.dumps(data)
@@ -82,13 +81,20 @@ def get_qlength():
     if dict_of_queues and isinstance(dict_of_queues, dict):
         for k, v in dict_of_queues.items():
             qlength += len(v)
+
+    dict_of_queues = celery_inspector.active()
+    if dict_of_queues and isinstance(dict_of_queues, dict):
+        for k, v in dict_of_queues.items():
+            qlength += len(v)
     return qlength
 
 
 async def _async_post_webhooks(endpoints, url_extension, payload):
     webhook_logs = []
     total_success, total_failed = 0, 0
-    async with AsyncClient() as client:
+    # Temporary fix for the issue with the number of connections caused by a certain client
+    limits = httpx.Limits(max_connections=250)
+    async with AsyncClient(limits=limits) as client:
         tasks = []
         for endpoint in endpoints:
             # Check if the webhook URL is valid
@@ -160,15 +166,20 @@ def task_send_webhooks(
     if qlength > 100:
         app_logger.error('Queue is too long. Check workers and speeds.')
 
-    with Session(engine) as db:
-        # Get all the endpoints for the branch
-        endpoints_query = select(WebhookEndpoint).where(WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active)
-        endpoints = db.exec(endpoints_query).all()
+    with logfire.span('Sending webhooks for branch: {branch_id=}', branch_id=branch_id):
+        with Session(engine) as db:
+            # Get all the endpoints for the branch
+            endpoints_query = select(WebhookEndpoint).where(
+                WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active
+            )
+            endpoints = db.exec(endpoints_query).all()
 
-        webhook_logs, total_success, total_failed = asyncio.run(_async_post_webhooks(endpoints, url_extension, payload))
-        for webhook_log in webhook_logs:
-            db.add(webhook_log)
-        db.commit()
+            webhook_logs, total_success, total_failed = asyncio.run(
+                _async_post_webhooks(endpoints, url_extension, payload)
+            )
+            for webhook_log in webhook_logs:
+                db.add(webhook_log)
+            db.commit()
     app_logger.info(
         '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
         total_success + total_failed,
