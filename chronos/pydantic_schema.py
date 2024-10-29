@@ -77,3 +77,4 @@ class RequestData(BaseModel):
     response_headers: str = '{"Message": "No response from endpoint"}'
     response_body: str = '{"Message": "No response from endpoint"}'
     status_code: int = 999
+    successful_response: str = False

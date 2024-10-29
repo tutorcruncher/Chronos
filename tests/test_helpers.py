@@ -1,6 +1,7 @@
 import json
 
-from requests import Request, Response
+from httpx import Response
+from requests import Request
 
 from chronos.main import app
 from chronos.sql_models import WebhookEndpoint, WebhookLog
@@ -116,10 +117,7 @@ def get_successful_response(payload, headers, **kwargs) -> Response:
     request = Request()
     request.headers = headers
     request.body = json.dumps(payload).encode()
-    response = Response()
-    response.request = request
-    response.status_code = 200
-    response._content = json.dumps(response_dict).encode()
+    response = Response(status_code=200, request=request, content=json.dumps(response_dict).encode())
     return response
 
 
@@ -130,8 +128,5 @@ def get_failed_response(payload, headers, **kwargs) -> Response:
     request = Request()
     request.headers = headers
     request.body = json.dumps(payload).encode()
-    response = Response()
-    response.request = request
-    response.status_code = 409
-    response._content = json.dumps(response_dict).encode()
+    response = Response(status_code=409, request=request, content=json.dumps(response_dict).encode())
     return response
