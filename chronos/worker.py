@@ -87,6 +87,7 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     total_success, total_failed = 0, 0
     # Temporary fix for the issue with the number of connections caused by a certain client
     limits = httpx.Limits(max_connections=250)
+
     async with AsyncClient(limits=limits) as client:
         tasks = []
         for endpoint in endpoints:
@@ -99,7 +100,7 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                 )
                 continue
             # Create sig for the endpoint
-            webhook_sig = hmac.new(endpoint.api_key.encode(), json.dumps(payload).encode(), hashlib.sha256)
+            webhook_sig = hmac.new(endpoint.api_key.encode(), payload.encode(), hashlib.sha256)
             sig_hex = webhook_sig.hexdigest()
 
             url = endpoint.webhook_url
