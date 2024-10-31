@@ -3,7 +3,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
@@ -178,24 +177,12 @@ async def get_logs(
     except NoResultFound as e:
         return {'message': f'WebhookEndpoint with TC ID: {tc_id} not found: {e}', 'logs': [], 'count': 0}
 
-    # Get the total count of logs for the relevant endpoint
-    count_stmt = select(func.count(WebhookLog.id)).where(WebhookLog.webhook_endpoint_id == endpoint.id)
-    count = db.exec(count_stmt).one()
-
     offset = page * 50
-    if count <= offset:
-        return {'message': f'No logs found for page: {page}', 'logs': [], 'count': count}
 
     # Get the Logs and related endpoint
-    statement = (
-        select(WebhookLog)
-        .where(WebhookLog.webhook_endpoint_id == endpoint.id)
-        .order_by(WebhookLog.timestamp.desc())
-        .offset(offset)
-        .limit(50)
-    )
-    results = db.exec(statement)
-    logs = results.all()
+    logs = db.exec(
+        select(WebhookLog).where(WebhookLog.webhook_endpoint_id == endpoint.id).offset(offset).limit(100)
+    ).all()
     list_of_webhooks = [
         {
             'request_headers': json.loads(log.request_headers),
@@ -209,7 +196,14 @@ async def get_logs(
         }
         for log in logs
     ]
-    return {'logs': list_of_webhooks, 'count': count}
+
+    # If another page is available this will show in TC2 without extra slow queries
+    # Its a false count that just indicates more pages available
+    count = offset + len(list_of_webhooks)
+    if count <= offset:
+        return {'message': f'No logs found for page: {page}', 'logs': [], 'count': count}
+
+    return {'logs': list_of_webhooks[:50], 'count': count}
 
 
 @main_router.get('/', description='Index page for Chronos')
