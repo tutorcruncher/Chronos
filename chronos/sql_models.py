@@ -37,7 +37,7 @@ class WebhookLog(SQLModel, table=True):
     status_code: Optional[int]
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
 
-    webhook_endpoint_id: int | None = Field(default=None, foreign_key='webhookendpoint.id')
+    webhook_endpoint_id: int | None = Field(default=None, foreign_key='webhookendpoint.id', index=True)
 
     def __repr__(self):
         return f'WebhookLog(id={self.id}, payload={self.request_body}, created_at={self.timestamp})'

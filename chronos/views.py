@@ -181,7 +181,11 @@ async def get_logs(
 
     # Get the Logs and related endpoint
     logs = db.exec(
-        select(WebhookLog).where(WebhookLog.webhook_endpoint_id == endpoint.id).offset(offset).limit(100)
+        select(WebhookLog)
+        .where(WebhookLog.webhook_endpoint_id == endpoint.id)
+        .order_by(WebhookLog.timestamp.desc())
+        .offset(offset)
+        .limit(100)
     ).all()
     list_of_webhooks = [
         {
