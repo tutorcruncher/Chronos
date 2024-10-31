@@ -59,12 +59,12 @@ class TCPublicProfileWebhook(BaseModel):
     review_duration: int
     location: dict
     photo: str
-    extra_attributes: list
-    skills: list
-    labels: list
+    extra_attributes: list[dict]
+    skills: list[dict]
+    labels: list[dict]
     created: str
     release_timestamp: str
-    request_time: int = Field(alias='_request_time')
+    request_time: int
 
 
 class RequestData(BaseModel):
