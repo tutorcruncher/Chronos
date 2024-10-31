@@ -11,9 +11,11 @@ from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
     create_webhook_log_from_dft_data,
+    get_dft_con_webhook_data,
     get_dft_get_log_data,
     get_dft_webhook_data,
     send_webhook_url,
+    send_webhook_with_extension_url,
 )
 
 
@@ -23,6 +25,46 @@ def test_send_webhooks(session: Session, client: TestClient):
 
     with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
         r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
+        assert mock_task.called
+    assert r.status_code == 200
+    assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
+
+
+def test_send_webhooks_con_endpoint(session: Session, client: TestClient):
+    payload = get_dft_con_webhook_data()
+    headers = _get_webhook_headers()
+
+    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
+        r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
+        assert mock_task.called
+    assert r.status_code == 200
+    assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
+
+
+def test_send_webhooks_con_endpoint_deleted_user(session: Session, client: TestClient):
+    set_deleted_kwargs = {
+        'id': 1,
+        'deleted': True,
+        'first_name': None,
+        'last_name': None,
+        'town': None,
+        'country': None,
+        'review_rating': None,
+        'review_duration': None,
+        'location': None,
+        'photo': None,
+        'extra_attributes': None,
+        'skills': None,
+        'labels': None,
+        'created': None,
+        'release_timestamp': 'test',
+        'request_time': 1234567890,
+    }
+    payload = get_dft_con_webhook_data(**set_deleted_kwargs)
+    headers = _get_webhook_headers()
+
+    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
+        r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
         assert mock_task.called
     assert r.status_code == 200
     assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'

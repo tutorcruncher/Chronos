@@ -49,6 +49,30 @@ def get_dft_webhook_data(branch_id: int = None, **kwargs) -> dict:
     return webhook_dict
 
 
+def get_dft_con_webhook_data(**kwargs) -> dict:
+    webhook_dict = {
+        'id': 1,
+        'deleted': False,
+        'first_name': 'test',
+        'last_name': 'test',
+        'town': 'test',
+        'country': 'test',
+        'review_rating': 4.5,
+        'review_duration': 100,
+        'location': {'lat': 1.0, 'long': 1.0},
+        'photo': 'test',
+        'extra_attributes': [{'test': 'test'}],
+        'skills': [{'test': 'test'}],
+        'labels': [{'test': 'test'}],
+        'created': 'test',
+        'release_timestamp': 'test',
+        'request_time': 1234567890,
+    }
+    for k, v in kwargs.items():
+        webhook_dict[k] = v
+    return webhook_dict
+
+
 def get_dft_get_log_data(tc_id: int = None, **kwargs) -> dict:
     webhook_dict = {
         'tc_id': tc_id or 1,

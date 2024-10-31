@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -50,18 +50,18 @@ class TCPublicProfileWebhook(BaseModel):
 
     id: int
     deleted: bool
-    first_name: str
-    last_name: str
-    town: str
-    country: str
-    review_rating: float
-    review_duration: int
-    location: dict
-    photo: str
-    extra_attributes: list[dict]
-    skills: list[dict]
-    labels: list[dict]
-    created: str
+    first_name: Optional[str]
+    last_name: Optional[str]
+    town: Optional[str]
+    country: Optional[str]
+    review_rating: Optional[float]
+    review_duration: Optional[int]
+    location: Optional[dict]
+    photo: Optional[str]
+    extra_attributes: Optional[list[dict]]
+    skills: Optional[list[dict]]
+    labels: Optional[list[dict]]
+    created: Optional[str]
     release_timestamp: str
     request_time: int
 
