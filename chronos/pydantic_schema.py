@@ -1,7 +1,6 @@
 from typing import Any
 
 from pydantic import BaseModel
-from pydantic.fields import Field
 
 
 class TCIntegration(BaseModel):
