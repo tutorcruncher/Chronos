@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import logfire
@@ -75,10 +75,6 @@ def get_qlength():
         for k, v in dict_of_queues.items():
             qlength += len(v)
 
-    dict_of_queues = celery_inspector.active()
-    if dict_of_queues and isinstance(dict_of_queues, dict):
-        for k, v in dict_of_queues.items():
-            qlength += len(v)
     return qlength
 
 
@@ -196,12 +192,16 @@ async def delete_old_logs_job():
 def _delete_old_logs_job():
     with Session(engine) as db:
         # Get all logs older than 15 days
-        statement = select(WebhookLog).where(WebhookLog.timestamp > datetime.utcnow() - timedelta(days=15))
-        results = db.exec(statement).all()
+        date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
+        with logfire.span(
+            'Deleting webhooks for {date_to_delete_before=}', date_to_delete_before=date_to_delete_before
+        ):
+            statement = select(WebhookLog).where(WebhookLog.timestamp > date_to_delete_before)
+            results = db.exec(statement).all()
 
-        # Delete the logs
-        delete_statement = delete(WebhookLog).where(col(WebhookLog.id).in_([whl.id for whl in results]))
-        db.exec(delete_statement)
-        db.commit()
+            # Delete the logs
+            delete_statement = delete(WebhookLog).where(col(WebhookLog.id).in_([whl.id for whl in results]))
+            db.exec(delete_statement)
+            db.commit()
 
         app_logger.info(f'Deleting {len(results)} logs')
