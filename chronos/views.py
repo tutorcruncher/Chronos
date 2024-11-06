@@ -36,9 +36,6 @@ def send_webhooks(
     """
     assert check_authorisation(authorisation)
     webhook_payload = webhook.model_dump()
-    _request_time = webhook_payload.pop('request_time_2')
-    if _request_time and not webhook_payload.get('request_time'):
-        webhook_payload['request_time'] = _request_time
 
     # Start job to send webhooks to endpoints on the workers
     task_send_webhooks.delay(json.dumps(webhook_payload), url_extension)

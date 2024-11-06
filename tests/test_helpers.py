@@ -45,7 +45,10 @@ def get_dft_webhook_data(branch_id: int = None, **kwargs) -> dict:
         'request_time': 1234567890,
     }
     for k, v in kwargs.items():
-        webhook_dict[k] = v
+        if v is not None:
+            webhook_dict[k] = v
+        else:
+            webhook_dict.pop(k)
     return webhook_dict
 
 
@@ -69,7 +72,10 @@ def get_dft_con_webhook_data(**kwargs) -> dict:
         'request_time': 1234567890,
     }
     for k, v in kwargs.items():
-        webhook_dict[k] = v
+        if v is not None:
+            webhook_dict[k] = v
+        else:
+            webhook_dict.pop(k)
     return webhook_dict
 
 
