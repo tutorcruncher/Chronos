@@ -1,6 +1,6 @@
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TCIntegration(BaseModel):
@@ -63,7 +63,9 @@ class TCPublicProfileWebhook(BaseModel):
     labels: Optional[list[dict]]
     created: Optional[str]
     release_timestamp: str
-    request_time: int
+    request_time: Optional[int]
+    # Temporary handling of request time
+    request_time_2: Optional[int] = Field(alias='_request_time')
 
 
 class RequestData(BaseModel):
