@@ -2,14 +2,16 @@ import asyncio
 import hashlib
 import hmac
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import logfire
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from celery.app import Celery
-from fastapi import APIRouter
-from fastapi_utilities import repeat_at
+from fastapi import APIRouter, FastAPI
 from httpx import AsyncClient
+from redis import Redis
 from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
@@ -22,6 +24,7 @@ cronjob = APIRouter()
 
 celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.broker_connection_retry_on_startup = True
+cache = Redis.from_url(settings.redis_url)
 
 
 async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, webhook_sig: str, data: dict = None):
@@ -179,17 +182,32 @@ def task_send_webhooks(
     )
 
 
-@cronjob.on_event('startup')
-@repeat_at(cron='0 0 * * *')
+DELETE_JOBS_KEY = 'delete_old_logs_job'
+
+scheduler = AsyncIOScheduler(timezone=UTC)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.start()
+    yield
+    scheduler.shutdown()
+
+
+@scheduler.scheduled_job('cron', hour=0, minute=0)
 async def delete_old_logs_job():
     """
     We run cron job at midnight every day that wipes all WebhookLogs older than 15 days
     """
-    _delete_old_logs_job.delay()
+    if cache.get(DELETE_JOBS_KEY):
+        return
+    else:
+        _delete_old_logs_job.delay()
 
 
 @celery_app.task
 def _delete_old_logs_job():
+    cache.set(DELETE_JOBS_KEY, 'True', ex=86400)
     with Session(engine) as db:
         # Get all logs older than 15 days
         date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
@@ -205,3 +223,4 @@ def _delete_old_logs_job():
             db.commit()
 
         app_logger.info(f'Deleting {len(results)} logs')
+    cache.delete(DELETE_JOBS_KEY)

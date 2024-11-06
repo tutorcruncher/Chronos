@@ -17,7 +17,9 @@ class WebhookEndpoint(SQLModel, table=True):
     webhook_url: str
     api_key: str
     active: bool
-    timestamp: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)  # do we care?
+    timestamp: datetime.datetime = Field(
+        default_factory=datetime.datetime.utcnow, nullable=False, index=True
+    )  # do we care?
 
     def __repr__(self):
         return f'WebhookEndpoint(id={self.id}, name={self.name}, webhook_url={self.webhook_url})'
@@ -35,7 +37,7 @@ class WebhookLog(SQLModel, table=True):
     response_body: Optional[dict] = Field(nullable=True, sa_type=JSONB)
     status: str
     status_code: Optional[int]
-    timestamp: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
+    timestamp: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, index=True)
 
     webhook_endpoint_id: int | None = Field(default=None, foreign_key='webhookendpoint.id', index=True)
 

@@ -30,6 +30,17 @@ def test_send_webhooks(session: Session, client: TestClient):
     assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
 
 
+def test_send_webhooks__request_time(session: Session, client: TestClient):
+    payload = get_dft_con_webhook_data(_request_time=1234567890, request_time=None)
+    headers = _get_webhook_headers()
+
+    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
+        r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
+        assert mock_task.called
+    assert r.status_code == 200
+    assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
+
+
 def test_send_webhooks_con_endpoint(session: Session, client: TestClient):
     payload = get_dft_con_webhook_data()
     headers = _get_webhook_headers()

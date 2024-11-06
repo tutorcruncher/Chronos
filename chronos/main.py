@@ -9,7 +9,7 @@ from starlette.middleware.cors import CORSMiddleware
 from chronos.logging import config
 from chronos.utils import settings as _app_settings
 from chronos.views import main_router
-from chronos.worker import cronjob
+from chronos.worker import cronjob, lifespan
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if _app_settings.sentry_dsn:
@@ -17,8 +17,7 @@ if _app_settings.sentry_dsn:
         dsn=_app_settings.sentry_dsn,
     )
 
-
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 if _app_settings.on_beta:
     allowed_origins = ['https://beta.tutorcruncher.com']
