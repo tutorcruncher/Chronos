@@ -50,18 +50,18 @@ class TCPublicProfileWebhook(BaseModel):
 
     id: int
     deleted: bool
-    first_name: Optional[str]
-    last_name: Optional[str]
-    town: Optional[str]
-    country: Optional[str]
-    review_rating: Optional[float]
-    review_duration: Optional[int]
-    location: Optional[dict]
-    photo: Optional[str]
-    extra_attributes: Optional[list[dict]]
-    skills: Optional[list[dict]]
-    labels: Optional[list[dict]]
-    created: Optional[str]
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    town: Optional[str] = None
+    country: Optional[str] = None
+    review_rating: Optional[float] = None
+    review_duration: Optional[int] = None
+    location: Optional[dict] = None
+    photo: Optional[str] = None
+    extra_attributes: Optional[list[dict]] = None
+    skills: Optional[list[dict]] = None
+    labels: Optional[list[dict]] = None
+    created: Optional[str] = None
     release_timestamp: str
     request_time: Optional[int] = Field(validation_alias=AliasChoices('request_time', '_request_time'))
 
