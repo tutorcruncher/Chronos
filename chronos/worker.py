@@ -152,14 +152,19 @@ def task_send_webhooks(
     """
     loaded_payload = json.loads(payload)
     loaded_payload['_request_time'] = loaded_payload.pop('request_time')
-    branch_id = loaded_payload['events'][0]['branch']
-
     qlength = get_qlength()
-    app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
+
+    if loaded_payload.get('events'):
+        branch_id = loaded_payload['events'][0]['branch']
+    else:
+        branch_id = loaded_payload['branch_id']
+
     if qlength > 100:
         app_logger.error('Queue is too long. Check workers and speeds.')
 
-    with logfire.span('Sending webhooks for branch: {branch_id=}', branch_id=branch_id):
+    app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
+    lf_span = 'Sending webhooks for branch: {branch_id=}'
+    with logfire.span(lf_span, branch_id=branch_id):
         with Session(engine) as db:
             # Get all the endpoints for the branch
             endpoints_query = select(WebhookEndpoint).where(
@@ -202,25 +207,29 @@ async def delete_old_logs_job():
     if cache.get(DELETE_JOBS_KEY):
         return
     else:
-        _delete_old_logs_job.delay()
+        with logfire.span('Starting to delete old logs'):
+            _delete_old_logs_job.delay()
 
 
 @celery_app.task
 def _delete_old_logs_job():
-    cache.set(DELETE_JOBS_KEY, 'True', ex=86400)
-    with Session(engine) as db:
-        # Get all logs older than 15 days
-        date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
-        with logfire.span(
-            'Deleting webhooks for {date_to_delete_before=}', date_to_delete_before=date_to_delete_before
-        ):
-            statement = select(WebhookLog).where(WebhookLog.timestamp > date_to_delete_before)
-            results = db.exec(statement).all()
+    with logfire.span('Started to delete old logs'):
+        cache.set(DELETE_JOBS_KEY, 'True', ex=86400)
+        with Session(engine) as db:
+            # Get all logs older than 15 days
+            date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
+            with logfire.span(
+                'Deleting webhooks for {date_to_delete_before=}', date_to_delete_before=date_to_delete_before
+            ):
+                statement = select(WebhookLog).where(WebhookLog.timestamp > date_to_delete_before)
+                results = db.exec(statement).all()
 
-            # Delete the logs
-            delete_statement = delete(WebhookLog).where(col(WebhookLog.id).in_([whl.id for whl in results]))
-            db.exec(delete_statement)
-            db.commit()
+                count = len(results)
+                # Delete the logs
+                with logfire.span('Deleting {count=}', count=count):
+                    delete_statement = delete(WebhookLog).where(col(WebhookLog.id).in_([whl.id for whl in results]))
+                    db.exec(delete_statement)
+                    db.commit()
 
-        app_logger.info(f'Deleting {len(results)} logs')
+            app_logger.info(f'Deleting {count} logs')
     cache.delete(DELETE_JOBS_KEY)
