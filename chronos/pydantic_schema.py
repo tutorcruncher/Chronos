@@ -49,6 +49,7 @@ class TCPublicProfileWebhook(BaseModel):
     """
 
     id: int
+    branch_id: int
     deleted: bool
     first_name: Optional[str] = None
     last_name: Optional[str] = None

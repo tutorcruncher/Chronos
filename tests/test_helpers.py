@@ -55,6 +55,7 @@ def get_dft_webhook_data(branch_id: int = None, **kwargs) -> dict:
 def get_dft_con_webhook_data(**kwargs) -> dict:
     webhook_dict = {
         'id': 1,
+        'branch_id': 99,
         'deleted': False,
         'first_name': 'test',
         'last_name': 'test',
