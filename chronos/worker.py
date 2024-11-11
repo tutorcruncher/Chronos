@@ -214,14 +214,14 @@ async def delete_old_logs_job():
 @celery_app.task
 def _delete_old_logs_job():
     with logfire.span('Started to delete old logs'):
-        cache.set(DELETE_JOBS_KEY, 'True', ex=86400)
+        cache.set(DELETE_JOBS_KEY, 'True', ex=1200)
         with Session(engine) as db:
             # Get all logs older than 15 days
             date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
             with logfire.span(
                 'Deleting webhooks for {date_to_delete_before=}', date_to_delete_before=date_to_delete_before
             ):
-                statement = select(WebhookLog).where(WebhookLog.timestamp > date_to_delete_before)
+                statement = select(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before)
                 results = db.exec(statement).all()
 
                 count = len(results)
