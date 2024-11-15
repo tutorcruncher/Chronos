@@ -211,6 +211,20 @@ async def delete_old_logs_job():
             _delete_old_logs_job.delay()
 
 
+def get_count(date_to_delete_before: datetime) -> int:
+    """
+    Get the count of all logs
+    """
+    with Session(engine) as db:
+        count = (
+            db.query(WebhookLog)
+            .with_entities(func.count())
+            .where(WebhookLog.timestamp < date_to_delete_before)
+            .scalar()
+        )
+    return count
+
+
 @celery_app.task
 def _delete_old_logs_job():
     with logfire.span('Started to delete old logs'):
@@ -221,16 +235,18 @@ def _delete_old_logs_job():
             with logfire.span(
                 'Deleting webhooks for {date_to_delete_before=}', date_to_delete_before=date_to_delete_before
             ):
-                count = (
-                    db.query(WebhookLog)
-                    .with_entities(func.count())
-                    .where(WebhookLog.timestamp < date_to_delete_before)
-                    .scalar()
-                )
-                app_logger.info(f'Deleting {count} logs')
-                with logfire.span('Deleting {count=}', count=count):
-                    delete_statement = delete(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before)
-                    db.exec(delete_statement)
-                    db.commit()
+                count = get_count(date_to_delete_before)
+                delete_limit = 4999
+                while count > 0:
+                    app_logger.info(f'Deleting {count} logs')
+                    deleting_count = min(count, delete_limit)
+                    with logfire.span('Deleting {count=}', count=deleting_count):
+                        logs_to_delete = db.exec(
+                            select(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before).limit(delete_limit)
+                        ).all()
+                        delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log.id for log in logs_to_delete))
+                        db.exec(delete_statement)
+                        db.commit()
+                        count = get_count(date_to_delete_before)
 
     cache.delete(DELETE_JOBS_KEY)
