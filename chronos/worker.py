@@ -247,6 +247,6 @@ def _delete_old_logs_job():
                         delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log.id for log in logs_to_delete))
                         db.exec(delete_statement)
                         db.commit()
-                        count = get_count(date_to_delete_before)
+                        count -= delete_limit
 
     cache.delete(DELETE_JOBS_KEY)
