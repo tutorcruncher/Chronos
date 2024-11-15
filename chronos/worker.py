@@ -12,8 +12,8 @@ from celery.app import Celery
 from fastapi import APIRouter, FastAPI
 from httpx import AsyncClient
 from redis import Redis
-from sqlalchemy import delete
-from sqlmodel import Session, col, select
+from sqlalchemy import delete, func
+from sqlmodel import Session, select
 
 from chronos.db import engine
 from chronos.pydantic_schema import RequestData
@@ -221,15 +221,16 @@ def _delete_old_logs_job():
             with logfire.span(
                 'Deleting webhooks for {date_to_delete_before=}', date_to_delete_before=date_to_delete_before
             ):
-                statement = select(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before)
-                results = db.exec(statement).all()
-
-                count = len(results)
-                # Delete the logs
+                count = (
+                    db.query(WebhookLog)
+                    .with_entities(func.count())
+                    .where(WebhookLog.timestamp < date_to_delete_before)
+                    .scalar()
+                )
+                app_logger.info(f'Deleting {count} logs')
                 with logfire.span('Deleting {count=}', count=count):
-                    delete_statement = delete(WebhookLog).where(col(WebhookLog.id).in_([whl.id for whl in results]))
+                    delete_statement = delete(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before)
                     db.exec(delete_statement)
                     db.commit()
 
-            app_logger.info(f'Deleting {count} logs')
     cache.delete(DELETE_JOBS_KEY)
