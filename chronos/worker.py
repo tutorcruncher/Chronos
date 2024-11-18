@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import hashlib
 import hmac
 import json
@@ -228,25 +229,27 @@ def get_count(date_to_delete_before: datetime) -> int:
 
 @celery_app.task
 def _delete_old_logs_job():
-    with logfire.span('Started to delete old logs'):
-        with Session(engine) as db:
-            # Get all logs older than 15 days
-            date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
-            with logfire.span(
-                'Deleting webhooks for {date_to_delete_before=}', date_to_delete_before=date_to_delete_before
-            ):
-                count = get_count(date_to_delete_before)
-                delete_limit = 4999
-                while count > 0:
-                    app_logger.info(f'Deleting {count} logs')
-                    deleting_count = min(count, delete_limit)
-                    with logfire.span('Deleting {count=}', count=deleting_count):
-                        logs_to_delete = db.exec(
-                            select(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before).limit(delete_limit)
-                        ).all()
-                        delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log.id for log in logs_to_delete))
-                        db.exec(delete_statement)
-                        db.commit()
-                        count -= delete_limit
+    # with logfire.span('Started to delete old logs'):
+    with Session(engine) as db:
+        # Get all logs older than 15 days
+        date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
+        # with logfire.span(
+        #     'Deleting webhooks for {date_to_delete_before=}', date_to_delete_before=date_to_delete_before
+        # ):
+        count = get_count(date_to_delete_before)
+        delete_limit = 4999
+        while count > 0:
+            app_logger.info(f'Deleting {count} logs')
+            logs_to_delete = db.exec(
+                select(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before).limit(delete_limit)
+            ).all()
+            delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log.id for log in logs_to_delete))
+            db.exec(delete_statement)
+            db.commit()
+            count -= delete_limit
+
+            del logs_to_delete
+            del delete_statement
+            gc.collect()
 
     cache.delete(DELETE_JOBS_KEY)
