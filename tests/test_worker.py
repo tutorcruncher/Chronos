@@ -6,7 +6,6 @@ import httpx
 import pytest
 import respx as respx
 from fastapi.testclient import TestClient
-from memory_profiler import profile
 from sqlmodel import Session, SQLModel, col, select
 
 from chronos.sql_models import WebhookEndpoint, WebhookLog

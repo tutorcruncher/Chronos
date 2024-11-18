@@ -1,9 +1,7 @@
 import asyncio
-import gc
 import hashlib
 import hmac
 import json
-import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -13,7 +11,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from celery.app import Celery
 from fastapi import APIRouter, FastAPI
 from httpx import AsyncClient
-from memory_profiler import profile
 from redis import Redis
 from sqlalchemy import delete, func
 from sqlmodel import Session, select
