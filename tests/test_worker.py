@@ -303,3 +303,36 @@ class TestWorkers:
         logs = db.exec(select(WebhookLog)).all()
         # The log from 15 days ago is seconds older than the check and thus sdoesn't get deleted
         assert len(logs) == 15
+
+    # Used for testing memory usage. Unnecessary for CI testing
+    # @profile and install memory-profiler to use
+    # def test_delete_old_logs_many(self, db: Session, client: TestClient, celery_session_worker):
+    #     eps = create_endpoint_from_dft_data()
+    #     for ep in eps:
+    #         db.add(ep)
+    #     db.commit()
+    #
+    #     for i in range(0, 30):
+    #         whl = create_webhook_log_from_dft_data(
+    #             webhook_endpoint_id=ep.id,
+    #             timestamp=datetime.utcnow() - timedelta(days=i),
+    #         )
+    #         db.add(whl)
+    #     db.commit()
+    #
+    #     for y in range(1000):
+    #         for i in range(1000):
+    #             whl = create_webhook_log_from_dft_data(
+    #                 webhook_endpoint_id=ep.id,
+    #                 timestamp=datetime.utcnow() - timedelta(days=20),
+    #             )
+    #             db.add(whl)
+    #         db.commit()
+    #
+    #     logs = db.exec(select(WebhookLog)).all()
+    #     assert len(logs) == 1000030
+    #
+    #     _delete_old_logs_job()
+    #     logs = db.exec(select(WebhookLog)).all()
+    #     # The log from 15 days ago is seconds older than the check and thus sdoesn't get deleted
+    #     assert len(logs) == 15
