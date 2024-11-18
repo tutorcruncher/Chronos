@@ -44,6 +44,8 @@ if bool(_app_settings.logfire_token):
     logfire.instrument_requests()
 
 logging.config.dictConfig(config)
-
+# Remove excessive sqlalchemy logging
+logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
+logging.getLogger('sqlalchemy.engine.Engine').disabled = True
 app.include_router(main_router, prefix='')
 app.include_router(cronjob, prefix='')
