@@ -208,9 +208,8 @@ async def delete_old_logs_job():
     if cache.get(DELETE_JOBS_KEY):
         return
     else:
-        await cache.set(DELETE_JOBS_KEY, 'True', ex=1200)
-        with logfire.span('Starting to delete old logs'):
-            _delete_old_logs_job.delay()
+        cache.set(DELETE_JOBS_KEY, 'True', ex=1200)
+        _delete_old_logs_job.delay()
 
 
 def get_count(date_to_delete_before: datetime) -> int:
@@ -228,6 +227,7 @@ def get_count(date_to_delete_before: datetime) -> int:
 
 
 @celery_app.task
+@logfire.no_auto_trace
 def _delete_old_logs_job():
     # with logfire.span('Started to delete old logs'):
     with Session(engine) as db:
