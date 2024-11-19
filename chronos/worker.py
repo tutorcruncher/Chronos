@@ -3,6 +3,7 @@ import gc
 import hashlib
 import hmac
 import json
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -12,6 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from celery.app import Celery
 from fastapi import APIRouter, FastAPI
 from httpx import AsyncClient
+from memory_profiler import profile
 from redis import Redis
 from sqlalchemy import delete, func
 from sqlmodel import Session, select
@@ -227,6 +229,7 @@ def get_count(date_to_delete_before: datetime) -> int:
 
 
 @celery_app.task
+@profile
 def _delete_old_logs_job():
     # with logfire.span('Started to delete old logs'):
     with Session(engine) as db:
@@ -237,9 +240,9 @@ def _delete_old_logs_job():
         while count > 0:
             app_logger.info(f'Deleting {count} logs')
             logs_to_delete = db.exec(
-                select(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before).limit(delete_limit)
+                select(WebhookLog.id).where(WebhookLog.timestamp < date_to_delete_before).limit(delete_limit)
             ).all()
-            delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log.id for log in logs_to_delete))
+            delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log_id for log_id in logs_to_delete))
             db.exec(delete_statement)
             db.commit()
             count -= delete_limit
