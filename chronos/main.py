@@ -38,7 +38,7 @@ if bool(_app_settings.logfire_token):
         console=False,
     )
     logfire.instrument_fastapi(app)
-    logfire.instrument_celery()
+    # logfire.instrument_celery()
     logfire.instrument_pydantic(record=_app_settings.logfire_log_level)
     logfire.instrument_psycopg()
     logfire.instrument_requests()
