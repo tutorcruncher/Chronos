@@ -21,5 +21,5 @@ sentry-sdk~=2.19.2
 setuptools~=75.7.0
 SQLAlchemy~=2.0.36
 sqlmodel~=0.0.22
-starlette~=0.45.2
+starlette~=0.41.2
 uvicorn~=0.34.0
