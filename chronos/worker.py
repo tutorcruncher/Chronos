@@ -191,13 +191,9 @@ def task_send_webhooks(
             
             #Maps dedup keys
             dedup_keys = [f"webhook:{e.id}:{endpoint_sigs[e.id]}" for e in endpoints]
-            print("DEDUP KEYS", dedup_keys)
             
             #For dedup key, it checks if there was a done state previously
             done_states = cache.mget(dedup_keys) 
-            
-            print("DONE STATES", done_states)
-            
             done_map = {e.id: done_states[i] for i, e in enumerate(endpoints)}
             endpoints = [e for e in endpoints if done_map.get(e.id) is None]
             
