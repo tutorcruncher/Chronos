@@ -61,6 +61,11 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
         request_data.response_body = json.dumps(r.content.decode())
         request_data.status_code = r.status_code
         request_data.successful_response = True
+        
+        #Set the dedup key
+        dedup_key = f"webhook:{endpoint_id}:{webhook_sig}"
+        cache.set(dedup_key, '1', ex=3600)
+
     return request_data
 
 
@@ -82,7 +87,7 @@ def get_qlength():
     return qlength
 
 
-async def _async_post_webhooks(endpoints, url_extension, payload):
+async def _async_post_webhooks(endpoints, url_extension, payload, signatures_map, done_map):
     webhook_logs = []
     total_success, total_failed = 0, 0
     # Temporary fix for the issue with the number of connections caused by a certain client
@@ -99,9 +104,13 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                     endpoint.id,
                 )
                 continue
-            # Create sig for the endpoint
-            webhook_sig = hmac.new(endpoint.api_key.encode(), payload.encode(), hashlib.sha256)
-            sig_hex = webhook_sig.hexdigest()
+            
+            if done_map.get(endpoint.id) is not None: 
+                #Webhook sending is done before once (given server_down_time < key_TTL)
+                continue
+            
+            # Get sig for the endpoint
+            sig_hex = signatures_map[endpoint.id]
 
             url = endpoint.webhook_url
             if url_extension:
@@ -113,6 +122,7 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                 webhook_request(client, url, endpoint.id, webhook_sig=sig_hex, data=loaded_payload)
             )
             tasks.append(task)
+            
         webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
         for response in webhook_responses:
             if not isinstance(response, RequestData):
@@ -172,10 +182,29 @@ def task_send_webhooks(
                 WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active
             )
             endpoints = db.exec(endpoints_query).all()
-
+            
+            # Pre-computing the sigs
+            endpoint_sigs = { 
+                endpoint.id: hmac.new(endpoint.api_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+                for endpoint in endpoints
+            }
+            
+            #Maps dedup keys
+            dedup_keys = [f"webhook:{e.id}:{endpoint_sigs[e.id]}" for e in endpoints]
+            print("DEDUP KEYS", dedup_keys)
+            
+            #For dedup key, it checks if there was a done state previously
+            done_states = cache.mget(dedup_keys) 
+            
+            print("DONE STATES", done_states)
+            
+            done_map = {e.id: done_states[i] for i, e in enumerate(endpoints)}
+            endpoints = [e for e in endpoints if done_map.get(e.id) is None]
+            
             webhook_logs, total_success, total_failed = asyncio.run(
-                _async_post_webhooks(endpoints, url_extension, payload)
+                _async_post_webhooks(endpoints, url_extension, payload, endpoint_sigs, done_map)
             )
+            
             for webhook_log in webhook_logs:
                 db.add(webhook_log)
             db.commit()
