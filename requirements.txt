@@ -2,12 +2,12 @@ apscheduler~=3.11.0
 celery~=5.4.0
 cryptography~=44.0.0
 docutils~=0.21
-fastapi~=0.115.7
+fastapi~=0.115.8
 fastapi_utilities~=0.3.0
 filelock~=3.17.0
 httpx~=0.28.1
-logfire~=3.3.0
-logfire[fastapi, requests, psycopg2, celery]~=3.3.0
+logfire~=3.4.0
+logfire[fastapi, requests, psycopg2, celery]~=3.4.0
 pillow~=11.1.0
 pip~=25.0
 psycopg2~=2.9.10
@@ -16,7 +16,7 @@ pydantic-settings~=2.7.1
 redis~=5.2.1
 requests~=2.32.3
 respx~=0.22.0
-ruff==0.9.3
+ruff==0.9.4
 sentry-sdk~=2.20.0
 setuptools~=75.8.0
 SQLAlchemy~=2.0.37
