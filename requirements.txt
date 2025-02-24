@@ -6,20 +6,20 @@ fastapi~=0.115.8
 fastapi_utilities~=0.3.0
 filelock~=3.17.0
 httpx~=0.28.1
-logfire~=3.5.3
-logfire[fastapi, requests, psycopg2, celery]~=3.5.3
+logfire~=3.6.2
+logfire[fastapi, requests, psycopg2, celery]~=3.6.2
 pillow~=11.1.0
 pip~=25.0
 psycopg2~=2.9.10
 pydantic~=2.10.6
-pydantic-settings~=2.7.1
+pydantic-settings~=2.8.0
 redis~=5.2.1
 requests~=2.32.3
 respx~=0.22.0
-ruff==0.9.6
-sentry-sdk~=2.21.0
+ruff==0.9.7
+sentry-sdk~=2.22.0
 setuptools~=75.8.0
 SQLAlchemy~=2.0.38
 sqlmodel~=0.0.22
-starlette~=0.45.3
+starlette~=0.46.0
 uvicorn~=0.34.0
