@@ -3,6 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import nullslast
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
@@ -183,7 +184,7 @@ async def get_logs(
     logs = db.exec(
         select(WebhookLog)
         .where(WebhookLog.webhook_endpoint_id == endpoint.id)
-        .order_by(WebhookLog.timestamp.desc())
+        .order_by(nullslast(WebhookLog.timestamp.desc()))
         .offset(offset)
         .limit(100)
     ).all()
