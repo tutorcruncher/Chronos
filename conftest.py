@@ -7,6 +7,7 @@ from chronos.db import get_session
 from chronos.main import app
 from chronos.settings import Settings
 from chronos.utils import settings
+from chronos.worker import ping
 
 pytest_plugins = ('celery.contrib.pytest',)
 
@@ -48,9 +49,19 @@ def client_fixture(session: Session):
 
 @pytest.fixture(scope='session')
 def celery_config():
-    return {'broker_url': 'redis://', 'result_backend': 'redis://'}
+    return {
+        'broker_url': 'redis://',
+        'result_backend': 'redis://',
+        'task_always_eager': True,
+        'task_eager_propagates': True,
+    }
 
 
 @pytest.fixture(scope='session')
 def celery_enable_logging():
     return True
+
+
+@pytest.fixture(scope='session')
+def celery_includes():
+    return ['chronos.worker']

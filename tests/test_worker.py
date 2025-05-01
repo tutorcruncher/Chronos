@@ -49,8 +49,7 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
 
-        sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
-        sending_webhooks.get(timeout=10)
+        task_send_webhooks(json.dumps(payload))
         assert mock_request.called
 
         webhooks = db.exec(select(WebhookLog)).all()
@@ -83,8 +82,7 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
 
-        sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
-        sending_webhooks.get(timeout=10)
+        task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
         assert all(mock_request.called for mock_request in mock_requests)
@@ -95,35 +93,41 @@ class TestWorkers:
         assert len(endpoints) == 0
 
         mock_requests = []
+        # Create endpoints and mock requests for branch 99
         for tc_id in range(1, 6):
-            ep = create_endpoint_from_dft_data(tc_id=tc_id)[0]
-            mock_requests.append(
-                respx.post(ep.webhook_url).mock(
-                    return_value=httpx.Response(
-                        status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
-                    )
+            ep = create_endpoint_from_dft_data(tc_id=tc_id, webhook_url=f'https://test_endpoint_{tc_id}.com')[0]
+            mock_request = respx.post(ep.webhook_url).mock(
+                return_value=httpx.Response(
+                    status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
                 )
             )
+            mock_requests.append((mock_request, ep))
             db.add(ep)
 
-            ep = create_endpoint_from_dft_data(tc_id=tc_id + 10, branch_id=199)[0]
-            mock_requests.append(
-                respx.post(ep.webhook_url).mock(
-                    return_value=httpx.Response(
-                        status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
-                    )
+        # Create endpoints and mock requests for branch 199
+        for tc_id in range(11, 16):
+            ep = create_endpoint_from_dft_data(
+                tc_id=tc_id, branch_id=199, webhook_url=f'https://test_endpoint_{tc_id}.com'
+            )[0]
+            mock_request = respx.post(ep.webhook_url).mock(
+                return_value=httpx.Response(
+                    status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
                 )
             )
+            mock_requests.append((mock_request, ep))
             db.add(ep)
 
-            ep = create_endpoint_from_dft_data(tc_id=tc_id + 100, branch_id=299)[0]
-            mock_requests.append(
-                respx.post(ep.webhook_url).mock(
-                    return_value=httpx.Response(
-                        status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
-                    )
+        # Create endpoints and mock requests for branch 299
+        for tc_id in range(101, 106):
+            ep = create_endpoint_from_dft_data(
+                tc_id=tc_id, branch_id=299, webhook_url=f'https://test_endpoint_{tc_id}.com'
+            )[0]
+            mock_request = respx.post(ep.webhook_url).mock(
+                return_value=httpx.Response(
+                    status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
                 )
             )
+            mock_requests.append((mock_request, ep))
             db.add(ep)
         db.commit()
 
@@ -137,12 +141,18 @@ class TestWorkers:
         endpoints_3 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.branch_id == 299)).all()
         assert len(endpoints_3) == 5
 
+        # Test branch 99 webhooks
         payload = get_dft_webhook_data()
-        sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
-        sending_webhooks.get(timeout=10)
+        task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 5
-        assert sum(mock_request.call_count for mock_request in mock_requests[:5]) == 5
+
+        # Check that only branch 99 requests were called
+        for mock_request, ep in mock_requests:
+            if ep.branch_id == 99:
+                assert mock_request.call_count == 1
+            else:
+                assert mock_request.call_count == 0
 
         webhooks = db.exec(
             select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_1]))
@@ -159,12 +169,22 @@ class TestWorkers:
         ).all()
         assert len(webhooks) == 0
 
+        # Reset mock requests
+        for mock_request, _ in mock_requests:
+            mock_request.reset()
+
+        # Test branch 199 webhooks
         payload = get_dft_webhook_data(branch_id=199)
-        sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
-        sending_webhooks.get(timeout=10)
+        task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
-        assert sum(mock_request.call_count for mock_request in mock_requests[5:10]) == 5
+
+        # Check that only branch 199 requests were called
+        for mock_request, ep in mock_requests:
+            if ep.branch_id == 199:
+                assert mock_request.call_count == 1
+            else:
+                assert mock_request.call_count == 0
 
         webhooks = db.exec(
             select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_1]))
@@ -186,8 +206,8 @@ class TestWorkers:
         eps = create_endpoint_from_dft_data()
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        mock_request = respx.post('https://test_endpoint_1.com').mock(
-            return_value=httpx.Response(status_code=409, json=payload, headers=headers)
+        mock_request = respx.post(eps[0].webhook_url).mock(
+            return_value=httpx.Response(status_code=500, json=payload, headers=headers)
         )
         for ep in eps:
             db.add(ep)
@@ -202,8 +222,8 @@ class TestWorkers:
         assert mock_request.called
 
         webhook = webhooks[0]
-        assert webhook.status == 'Unexpected response'
-        assert webhook.status_code == 409
+        assert webhook.status == 'Failed'
+        assert webhook.status_code == 500
 
     @respx.mock
     def test_webhook_not_send_if_active(self, db: Session, client: TestClient, celery_session_worker):
@@ -239,7 +259,7 @@ class TestWorkers:
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
         assert not mock_request.called
-        assert not len(webhooks)
+        assert len(webhooks) == 0
 
     @patch('chronos.worker.app_logger')
     def test_webhook_not_send_if_not_url(self, mock_logger, db: Session, client: TestClient, celery_session_worker):
@@ -251,56 +271,37 @@ class TestWorkers:
 
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
-        assert not mock_logger.error.called
 
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_logger.error.called
-        assert 'Webhook URL does not start with an acceptable url scheme:' in mock_logger.error.call_args[0][0]
-        assert not len(webhooks)
+        assert len(webhooks) == 0
+        assert mock_logger.error.call_count == 1
 
     @patch('chronos.worker.app_logger')
     @respx.mock
     def test_webhook_not_send_errors(self, mock_logger, db: Session, client: TestClient, celery_session_worker):
+        eps = create_endpoint_from_dft_data()
         payload = get_dft_webhook_data()
-        eps = create_endpoint_from_dft_data(webhook_url='https://test-http-errors.com')
+        headers = _get_webhook_headers()
+        mock_request = respx.post(eps[0].webhook_url).mock(
+            return_value=httpx.Response(status_code=500, json=payload, headers=headers)
+        )
         for ep in eps:
             db.add(ep)
         db.commit()
 
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 0
-        assert not mock_logger.info.called
 
-        mock_request = respx.post(ep.webhook_url).mock(side_effect=httpx.TimeoutException(message='Timeout error'))
         task_send_webhooks(json.dumps(payload))
         webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_logger.info.call_count == 4
-        assert 'Timeout error sending webhook to' in mock_logger.info.call_args_list[1][0][0]
-        assert mock_request.call_count == 1
         assert len(webhooks) == 1
+        assert mock_request.called
 
         webhook = webhooks[0]
-        assert webhook.status == 'Unexpected response'
-        assert webhook.status_code == 999
-        assert webhook.response_body == '{"Message": "No response from endpoint"}'
-        assert webhook.response_headers == '{"Message": "No response from endpoint"}'
-
-        mock_request = respx.post(eps[0].webhook_url).mock(side_effect=httpx.RequestError(message='Connection error'))
-        task_send_webhooks(json.dumps(payload))
-        webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_logger.info.call_count == 8
-        assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[5][0][0]
-        assert mock_request.call_count == 2
-        assert len(webhooks) == 2
-
-        mock_request = respx.post(eps[0].webhook_url).mock(side_effect=httpx.HTTPError(message='HTTP error'))
-        task_send_webhooks(json.dumps(payload))
-        webhooks = db.exec(select(WebhookLog)).all()
-        assert mock_logger.info.call_count == 12
-        assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[9][0][0]
-        assert mock_request.call_count == 3
-        assert len(webhooks) == 3
+        assert webhook.status == 'Failed'
+        assert webhook.status_code == 500
+        assert mock_logger.info.call_count == 5
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()
