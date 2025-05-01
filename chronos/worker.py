@@ -32,15 +32,12 @@ retry_strategy = Retry(
     total=3,  # Maximum number of retries
     backoff_factor=0.5,  # Exponential backoff factor
     status_forcelist=[500, 502, 503, 504],  # HTTP status codes to retry on
-    allowed_methods=["POST"]  # Only retry POST requests
+    allowed_methods=['POST'],  # Only retry POST requests
 )
 
 # Configure connection pooling
-limits = Limits(
-    max_connections=250,
-    max_keepalive_connections=50,
-    keepalive_expiry=60
-)
+limits = Limits(max_connections=250, max_keepalive_connections=50, keepalive_expiry=60)
+
 
 def is_rate_limited(endpoint_id: int) -> bool:
     """
@@ -48,11 +45,12 @@ def is_rate_limited(endpoint_id: int) -> bool:
     :param endpoint_id: ID of the webhook endpoint
     :return: True if rate limited, False otherwise
     """
-    key = f"rate_limit:{endpoint_id}"
+    key = f'rate_limit:{endpoint_id}'
     current = cache.incr(key)
     if current == 1:
         cache.expire(key, 60)  # Reset counter after 60 seconds
     return current > settings.max_requests_per_minute
+
 
 async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, webhook_sig: str, data: dict = None):
     """
@@ -75,7 +73,7 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
             request_body=json.dumps(data),
             status_code=429,
             successful_response=False,
-            response_body=json.dumps({"error": "Rate limit exceeded"})
+            response_body=json.dumps({'error': 'Rate limit exceeded'}),
         )
         return request_data
 
@@ -84,34 +82,28 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
         'Content-Type': 'application/json',
         'webhook-signature': webhook_sig,
     }
-    
+
     with logfire.span('{method=} {url!r}', url=url, method='POST'):
         r = None
         try:
             r = await client.post(
-                url=url,
-                json=data,
-                headers=headers,
-                timeout=settings.webhook_timeout,
-                retry=retry_strategy
+                url=url, json=data, headers=headers, timeout=settings.webhook_timeout, retry=retry_strategy
             )
         except httpx.TimeoutException as terr:
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
         except httpx.HTTPError as httperr:
             app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
-    
+
     request_data = RequestData(
-        endpoint_id=endpoint_id,
-        request_headers=json.dumps(headers),
-        request_body=json.dumps(data)
+        endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=json.dumps(data)
     )
-    
+
     if r is not None:
         request_data.response_headers = json.dumps(dict(r.headers))
         request_data.response_body = json.dumps(r.content.decode())
         request_data.status_code = r.status_code
         request_data.successful_response = True
-    
+
     return request_data
 
 

@@ -6,8 +6,10 @@ import httpx
 import pytest
 import respx as respx
 from fastapi.testclient import TestClient
+from redis import Redis
 from sqlmodel import Session, SQLModel, col, select
 
+from chronos.config import settings
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.worker import _delete_old_logs_job, task_send_webhooks
 from tests.test_helpers import (
@@ -18,8 +20,6 @@ from tests.test_helpers import (
     get_failed_response,
     get_successful_response,
 )
-from chronos.config import settings
-from redis import Redis
 
 
 class TestWorkers:
@@ -347,13 +347,13 @@ class TestWorkers:
 
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        
+
         # Mock a sequence of responses: first two 500s, then success
         mock_request = respx.post(ep.webhook_url).mock(
             side_effect=[
-                httpx.Response(500, json={"error": "Internal Server Error"}),
-                httpx.Response(500, json={"error": "Internal Server Error"}),
-                get_successful_response(payload, headers)
+                httpx.Response(500, json={'error': 'Internal Server Error'}),
+                httpx.Response(500, json={'error': 'Internal Server Error'}),
+                get_successful_response(payload, headers),
             ]
         )
 
@@ -379,7 +379,7 @@ class TestWorkers:
 
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        
+
         # Mock successful responses for all endpoints
         for ep in endpoints:
             respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
@@ -400,13 +400,13 @@ class TestWorkers:
 
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        
+
         # Mock successful response
         mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
 
         # Clear any existing rate limit keys
         cache = Redis.from_url(settings.redis_url)
-        cache.delete(f"rate_limit:{ep.id}")
+        cache.delete(f'rate_limit:{ep.id}')
 
         # Send requests up to the rate limit
         for _ in range(settings.max_requests_per_minute):
@@ -420,10 +420,11 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == settings.max_requests_per_minute + 1
         assert webhooks[-1].status_code == 429
-        assert "Rate limit exceeded" in webhooks[-1].response_body
+        assert 'Rate limit exceeded' in webhooks[-1].response_body
 
         # Wait for rate limit to expire
         import time
+
         time.sleep(61)
 
         # Try another request - should succeed
@@ -431,3 +432,4 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == settings.max_requests_per_minute + 2
         assert webhooks[-1].status_code == 200
+        assert mock_request.call_count == settings.max_requests_per_minute + 2
