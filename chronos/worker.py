@@ -39,19 +39,6 @@ retry_strategy = Retry(
 limits = Limits(max_connections=250, max_keepalive_connections=50, keepalive_expiry=60)
 
 
-def is_rate_limited(endpoint_id: int) -> bool:
-    """
-    Check if the endpoint is rate limited using Redis
-    :param endpoint_id: ID of the webhook endpoint
-    :return: True if rate limited, False otherwise
-    """
-    key = f'rate_limit:{endpoint_id}'
-    current = cache.incr(key)
-    if current == 1:
-        cache.expire(key, 60)  # Reset counter after 60 seconds
-    return current > settings.max_requests_per_minute
-
-
 async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, webhook_sig: str, data: dict = None):
     """
     Send a request to TutorCruncher with retry logic and connection pooling
@@ -63,19 +50,6 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
     :return: WebhookEndpoint response
     """
     from chronos.main import logfire
-
-    # Check rate limiting
-    if is_rate_limited(endpoint_id):
-        app_logger.warning('Rate limit exceeded for endpoint %s', endpoint_id)
-        request_data = RequestData(
-            endpoint_id=endpoint_id,
-            request_headers=json.dumps({}),
-            request_body=json.dumps(data),
-            status_code=429,
-            successful_response=False,
-            response_body=json.dumps({'error': 'Rate limit exceeded'}),
-        )
-        return request_data
 
     headers = {
         'User-Agent': 'TutorCruncher',
@@ -129,7 +103,6 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     webhook_logs = []
     total_success, total_failed = 0, 0
     # Temporary fix for the issue with the number of connections caused by a certain client
-    limits = httpx.Limits(max_connections=250)
 
     async with AsyncClient(limits=limits) as client:
         tasks = []

@@ -6,10 +6,8 @@ import httpx
 import pytest
 import respx as respx
 from fastapi.testclient import TestClient
-from redis import Redis
 from sqlmodel import Session, SQLModel, col, select
 
-from chronos.config import settings
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.worker import _delete_old_logs_job, task_send_webhooks
 from tests.test_helpers import (
@@ -391,45 +389,3 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == len(endpoints)
         assert all(w.status_code == 200 for w in webhooks)
-
-    @respx.mock
-    def test_webhook_rate_limiting(self, db: Session, client: TestClient, celery_session_worker):
-        ep = create_endpoint_from_dft_data()[0]
-        db.add(ep)
-        db.commit()
-
-        payload = get_dft_webhook_data()
-        headers = _get_webhook_headers()
-
-        # Mock successful response
-        mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
-
-        # Clear any existing rate limit keys
-        cache = Redis.from_url(settings.redis_url)
-        cache.delete(f'rate_limit:{ep.id}')
-
-        # Send requests up to the rate limit
-        for _ in range(settings.max_requests_per_minute):
-            task_send_webhooks(payload, None)
-            webhooks = db.exec(select(WebhookLog)).all()
-            assert len(webhooks) == _ + 1
-            assert webhooks[-1].status_code == 200
-
-        # Try one more request - should be rate limited
-        task_send_webhooks(payload, None)
-        webhooks = db.exec(select(WebhookLog)).all()
-        assert len(webhooks) == settings.max_requests_per_minute + 1
-        assert webhooks[-1].status_code == 429
-        assert 'Rate limit exceeded' in webhooks[-1].response_body
-
-        # Wait for rate limit to expire
-        import time
-
-        time.sleep(61)
-
-        # Try another request - should succeed
-        task_send_webhooks(payload, None)
-        webhooks = db.exec(select(WebhookLog)).all()
-        assert len(webhooks) == settings.max_requests_per_minute + 2
-        assert webhooks[-1].status_code == 200
-        assert mock_request.call_count == settings.max_requests_per_minute + 2
