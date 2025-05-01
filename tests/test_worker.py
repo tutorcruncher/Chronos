@@ -18,6 +18,8 @@ from tests.test_helpers import (
     get_failed_response,
     get_successful_response,
 )
+from chronos.config import settings
+from redis import Redis
 
 
 class TestWorkers:
@@ -336,3 +338,96 @@ class TestWorkers:
     #     logs = db.exec(select(WebhookLog)).all()
     #     # The log from 15 days ago is seconds older than the check and thus sdoesn't get deleted
     #     assert len(logs) == 15
+
+    @respx.mock
+    def test_webhook_retry_logic(self, db: Session, client: TestClient, celery_session_worker):
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
+        
+        # Mock a sequence of responses: first two 500s, then success
+        mock_request = respx.post(ep.webhook_url).mock(
+            side_effect=[
+                httpx.Response(500, json={"error": "Internal Server Error"}),
+                httpx.Response(500, json={"error": "Internal Server Error"}),
+                get_successful_response(payload, headers)
+            ]
+        )
+
+        endpoints = db.exec(select(WebhookEndpoint)).all()
+        assert len(endpoints) == 1
+
+        # Run the webhook task
+        task_send_webhooks(payload, None)
+
+        # Verify the request was retried and eventually succeeded
+        assert mock_request.call_count == 3
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+        assert webhooks[0].status_code == 200
+
+    @respx.mock
+    def test_webhook_connection_pooling(self, db: Session, client: TestClient, celery_session_worker):
+        # Create multiple endpoints
+        endpoints = create_endpoint_from_dft_data()[:5]
+        for ep in endpoints:
+            db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
+        
+        # Mock successful responses for all endpoints
+        for ep in endpoints:
+            respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        # Run the webhook task
+        task_send_webhooks(payload, None)
+
+        # Verify all webhooks were sent successfully
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == len(endpoints)
+        assert all(w.status_code == 200 for w in webhooks)
+
+    @respx.mock
+    def test_webhook_rate_limiting(self, db: Session, client: TestClient, celery_session_worker):
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
+        
+        # Mock successful response
+        mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        # Clear any existing rate limit keys
+        cache = Redis.from_url(settings.redis_url)
+        cache.delete(f"rate_limit:{ep.id}")
+
+        # Send requests up to the rate limit
+        for _ in range(settings.max_requests_per_minute):
+            task_send_webhooks(payload, None)
+            webhooks = db.exec(select(WebhookLog)).all()
+            assert len(webhooks) == _ + 1
+            assert webhooks[-1].status_code == 200
+
+        # Try one more request - should be rate limited
+        task_send_webhooks(payload, None)
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == settings.max_requests_per_minute + 1
+        assert webhooks[-1].status_code == 429
+        assert "Rate limit exceeded" in webhooks[-1].response_body
+
+        # Wait for rate limit to expire
+        import time
+        time.sleep(61)
+
+        # Try another request - should succeed
+        task_send_webhooks(payload, None)
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == settings.max_requests_per_minute + 2
+        assert webhooks[-1].status_code == 200
