@@ -15,7 +15,6 @@ from tests.test_helpers import (
     create_endpoint_from_dft_data,
     create_webhook_log_from_dft_data,
     get_dft_webhook_data,
-    get_failed_response,
     get_successful_response,
 )
 
@@ -40,7 +39,9 @@ class TestWorkers:
 
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+        mock_request = respx.post(ep.webhook_url).mock(
+            return_value=httpx.Response(status_code=200, json=payload, headers=headers)
+        )
 
         endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 1
@@ -67,8 +68,12 @@ class TestWorkers:
         eps = create_endpoint_from_dft_data(count=10)
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
+        mock_requests = []
         for ep in eps:
-            mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+            mock_request = respx.post(ep.webhook_url).mock(
+                return_value=httpx.Response(status_code=200, json=payload, headers=headers)
+            )
+            mock_requests.append(mock_request)
             db.add(ep)
         db.commit()
 
@@ -82,21 +87,43 @@ class TestWorkers:
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
-        assert mock_request.called
+        assert all(mock_request.called for mock_request in mock_requests)
 
     @respx.mock
     def test_send_correct_branch(self, db: Session, client: TestClient, celery_session_worker):
         endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 0
 
+        mock_requests = []
         for tc_id in range(1, 6):
             ep = create_endpoint_from_dft_data(tc_id=tc_id)[0]
+            mock_requests.append(
+                respx.post(ep.webhook_url).mock(
+                    return_value=httpx.Response(
+                        status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
+                    )
+                )
+            )
             db.add(ep)
 
             ep = create_endpoint_from_dft_data(tc_id=tc_id + 10, branch_id=199)[0]
+            mock_requests.append(
+                respx.post(ep.webhook_url).mock(
+                    return_value=httpx.Response(
+                        status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
+                    )
+                )
+            )
             db.add(ep)
 
             ep = create_endpoint_from_dft_data(tc_id=tc_id + 100, branch_id=299)[0]
+            mock_requests.append(
+                respx.post(ep.webhook_url).mock(
+                    return_value=httpx.Response(
+                        status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
+                    )
+                )
+            )
             db.add(ep)
         db.commit()
 
@@ -111,17 +138,11 @@ class TestWorkers:
         assert len(endpoints_3) == 5
 
         payload = get_dft_webhook_data()
-        headers = _get_webhook_headers()
-        mock_request = respx.post(endpoints[0].webhook_url).mock(return_value=get_successful_response(payload, headers))
-
-        webhooks = db.exec(select(WebhookLog)).all()
-        assert len(webhooks) == 0
-
         sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 5
-        assert len(mock_request.calls) == 5
+        assert sum(mock_request.call_count for mock_request in mock_requests[:5]) == 5
 
         webhooks = db.exec(
             select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_1]))
@@ -139,14 +160,11 @@ class TestWorkers:
         assert len(webhooks) == 0
 
         payload = get_dft_webhook_data(branch_id=199)
-        headers = _get_webhook_headers()
-        mock_request.return_value = get_successful_response(payload, headers)
-
         sending_webhooks = task_send_webhooks.delay(json.dumps(payload))
         sending_webhooks.get(timeout=10)
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 10
-        assert len(mock_request.calls) == 10
+        assert sum(mock_request.call_count for mock_request in mock_requests[5:10]) == 5
 
         webhooks = db.exec(
             select(WebhookLog).where(col(WebhookLog.webhook_endpoint_id).in_([ep.id for ep in endpoints_1]))
@@ -168,8 +186,10 @@ class TestWorkers:
         eps = create_endpoint_from_dft_data()
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
+        mock_request = respx.post('https://test_endpoint_1.com').mock(
+            return_value=httpx.Response(status_code=409, json=payload, headers=headers)
+        )
         for ep in eps:
-            mock_request = respx.post(ep.webhook_url).mock(return_value=get_failed_response(payload, headers))
             db.add(ep)
         db.commit()
 
@@ -339,114 +359,107 @@ class TestWorkers:
 
     @respx.mock
     def test_webhook_retry_logic(self, db: Session, client: TestClient, celery_session_worker):
-        ep = create_endpoint_from_dft_data()[0]
-        db.add(ep)
-        db.commit()
-
+        eps = create_endpoint_from_dft_data()
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-        
-        # Mock a sequence of responses: first two 500s, then success
-        mock_request = respx.post(ep.webhook_url).mock(
+        mock_request = respx.post('https://test_endpoint_1.com').mock(
             side_effect=[
-                httpx.Response(500, json={"error": "Internal Server Error"}),
-                httpx.Response(500, json={"error": "Internal Server Error"}),
-                get_successful_response(payload, headers)
+                httpx.Response(status_code=502),
+                httpx.Response(status_code=502),
+                httpx.Response(status_code=200, json=payload, headers=headers),
             ]
         )
-
-        endpoints = db.exec(select(WebhookEndpoint)).all()
-        assert len(endpoints) == 1
-
-        # Run the webhook task
-        task_send_webhooks(json.dumps(payload), None)
-
-        # Verify the request was retried and eventually succeeded
-        assert mock_request.call_count == 3
-        webhooks = db.exec(select(WebhookLog)).all()
-        assert len(webhooks) == 1
-        assert webhooks[0].status_code == 200
-
-    @respx.mock
-    def test_webhook_retry_timeout(self, db: Session, client: TestClient, celery_session_worker):
-        ep = create_endpoint_from_dft_data()[0]
-        db.add(ep)
-        db.commit()
-
-        payload = get_dft_webhook_data()
-        headers = _get_webhook_headers()
-        
-        # Mock a sequence of responses: first two timeouts, then success
-        mock_request = respx.post(ep.webhook_url).mock(
-            side_effect=[
-                httpx.TimeoutException("Request timed out"),
-                httpx.TimeoutException("Request timed out"),
-                get_successful_response(payload, headers)
-            ]
-        )
-
-        endpoints = db.exec(select(WebhookEndpoint)).all()
-        assert len(endpoints) == 1
-
-        # Run the webhook task
-        task_send_webhooks(json.dumps(payload), None)
-
-        # Verify the request was retried and eventually succeeded
-        assert mock_request.call_count == 3
-        webhooks = db.exec(select(WebhookLog)).all()
-        assert len(webhooks) == 1
-        assert webhooks[0].status_code == 200
-
-    @respx.mock
-    def test_webhook_retry_max_attempts(self, db: Session, client: TestClient, celery_session_worker):
-        ep = create_endpoint_from_dft_data()[0]
-        db.add(ep)
-        db.commit()
-
-        payload = get_dft_webhook_data()
-        headers = _get_webhook_headers()
-        
-        # Mock a sequence of responses: all 500s to test max retries
-        mock_request = respx.post(ep.webhook_url).mock(
-            side_effect=[
-                httpx.Response(500, json={"error": "Internal Server Error"}),
-                httpx.Response(500, json={"error": "Internal Server Error"}),
-                httpx.Response(500, json={"error": "Internal Server Error"}),
-                httpx.Response(500, json={"error": "Internal Server Error"})
-            ]
-        )
-
-        endpoints = db.exec(select(WebhookEndpoint)).all()
-        assert len(endpoints) == 1
-
-        # Run the webhook task
-        task_send_webhooks(json.dumps(payload), None)
-
-        # Verify the request was retried exactly 3 times (initial + 2 retries)
-        assert mock_request.call_count == 3
-        webhooks = db.exec(select(WebhookLog)).all()
-        assert len(webhooks) == 1
-        assert webhooks[0].status_code == 500
-
-    @respx.mock
-    def test_webhook_connection_pooling(self, db: Session, client: TestClient, celery_session_worker):
-        # Create multiple endpoints
-        endpoints = create_endpoint_from_dft_data()[:5]
-        for ep in endpoints:
+        for ep in eps:
             db.add(ep)
         db.commit()
 
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
+
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+        assert mock_request.call_count == 3
+
+        webhook = webhooks[0]
+        assert webhook.status == 'Success'
+        assert webhook.status_code == 200
+
+    @respx.mock
+    def test_webhook_retry_timeout(self, db: Session, client: TestClient, celery_session_worker):
+        eps = create_endpoint_from_dft_data()
+        payload = get_dft_webhook_data()
+        mock_request = respx.post('https://test_endpoint_1.com').mock(
+            side_effect=[
+                httpx.TimeoutException('Connection timed out'),
+                httpx.TimeoutException('Connection timed out'),
+                httpx.Response(status_code=200, json=payload, headers=_get_webhook_headers()),
+            ]
+        )
+        for ep in eps:
+            db.add(ep)
+        db.commit()
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
+
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+        assert mock_request.call_count == 3
+
+        webhook = webhooks[0]
+        assert webhook.status == 'Success'
+        assert webhook.status_code == 200
+
+    @respx.mock
+    def test_webhook_retry_max_attempts(self, db: Session, client: TestClient, celery_session_worker):
+        eps = create_endpoint_from_dft_data()
+        payload = get_dft_webhook_data()
+        mock_request = respx.post('https://test_endpoint_1.com').mock(
+            side_effect=[
+                httpx.Response(status_code=502),
+                httpx.Response(status_code=502),
+                httpx.Response(status_code=502),
+                httpx.Response(status_code=502),  # This one should not be called
+            ]
+        )
+        for ep in eps:
+            db.add(ep)
+        db.commit()
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 0
+
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+        assert mock_request.call_count == 3  # Should only try 3 times
+
+        webhook = webhooks[0]
+        assert webhook.status == 'Failed'
+        assert webhook.status_code == 502
+
+    @respx.mock
+    def test_webhook_connection_pooling(self, db: Session, client: TestClient, celery_session_worker):
+        eps = create_endpoint_from_dft_data()
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
+        mock_request = respx.post('https://test_endpoint_1.com').mock(
+            return_value=httpx.Response(status_code=200, json=payload, headers=headers)
+        )
+        for ep in eps:
+            db.add(ep)
+        db.commit()
 
-        # Mock successful responses for all endpoints
-        for ep in endpoints:
-            respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
-
-        # Run the webhook task
-        task_send_webhooks(json.dumps(payload), None)
-
-        # Verify all webhooks were sent successfully
         webhooks = db.exec(select(WebhookLog)).all()
-        assert len(webhooks) == len(endpoints)
-        assert all(w.status_code == 200 for w in webhooks)
+        assert len(webhooks) == 0
+
+        task_send_webhooks(json.dumps(payload))
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+        assert mock_request.called
+
+        webhook = webhooks[0]
+        assert webhook.status == 'Success'
+        assert webhook.status_code == 200

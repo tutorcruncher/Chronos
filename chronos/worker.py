@@ -30,6 +30,7 @@ cache = Redis.from_url(settings.redis_url)
 # Configure connection pooling
 limits = Limits(max_connections=250, max_keepalive_connections=50, keepalive_expiry=60)
 
+
 async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, webhook_sig: str, data: dict = None):
     """
     Send a request to TutorCruncher with retry logic and connection pooling
@@ -47,53 +48,65 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
         'Content-Type': 'application/json',
         'webhook-signature': webhook_sig,
     }
-    
+
     with logfire.span('{method=} {url!r}', url=url, method='POST'):
         r = None
         max_retries = 3
         retry_delay = 0.5  # Initial delay in seconds
-        
+        last_error = None
+
         for attempt in range(max_retries):
             try:
-                r = await client.post(
-                    url=url,
-                    json=data,
-                    headers=headers,
-                    timeout=settings.webhook_timeout
-                )
-                if r.status_code in [500, 502, 503, 504] and attempt < max_retries - 1:
-                    app_logger.info('Retrying request to %s after status code %s (attempt %s/%s)',
-                                  url, r.status_code, attempt + 1, max_retries)
-                    await asyncio.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
-                    continue
+                r = await client.post(url=url, json=data, headers=headers, timeout=settings.webhook_timeout)
+                if r.status_code in [500, 502, 503, 504]:
+                    last_error = f'Server error with status code {r.status_code}'
+                    if attempt < max_retries - 1:
+                        app_logger.info(
+                            'Retrying request to %s after status code %s (attempt %s/%s)',
+                            url,
+                            r.status_code,
+                            attempt + 1,
+                            max_retries,
+                        )
+                        await asyncio.sleep(retry_delay * (2**attempt))  # Exponential backoff
+                        continue
                 break
             except httpx.TimeoutException as terr:
+                last_error = terr
                 if attempt < max_retries - 1:
-                    app_logger.info('Timeout error sending webhook to %s: %s (attempt %s/%s)',
-                                  url, terr, attempt + 1, max_retries)
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    app_logger.info(
+                        'Timeout error sending webhook to %s: %s (attempt %s/%s)', url, terr, attempt + 1, max_retries
+                    )
+                    await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                 app_logger.info('Final timeout error sending webhook to %s: %s', url, terr)
             except httpx.HTTPError as httperr:
+                last_error = httperr
                 if attempt < max_retries - 1:
-                    app_logger.info('HTTP error sending webhook to %s: %s (attempt %s/%s)',
-                                  url, httperr, attempt + 1, max_retries)
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    app_logger.info(
+                        'HTTP error sending webhook to %s: %s (attempt %s/%s)', url, httperr, attempt + 1, max_retries
+                    )
+                    await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                 app_logger.info('Final HTTP error sending webhook to %s: %s', url, httperr)
-    
+
     request_data = RequestData(
-        endpoint_id=endpoint_id,
-        request_headers=json.dumps(headers),
-        request_body=json.dumps(data)
+        endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=json.dumps(data)
     )
-    
-    if r is not None:
+
+    if r is not None and r.status_code not in [500, 502, 503, 504]:
         request_data.response_headers = json.dumps(dict(r.headers))
-        request_data.response_body = json.dumps(r.content.decode())
+        request_data.response_body = r.content.decode()
         request_data.status_code = r.status_code
         request_data.successful_response = True
-    
+    else:
+        # Handle the case where the request failed completely
+        error_message = str(last_error) if last_error else 'No response from endpoint'
+        request_data.response_headers = json.dumps({'Message': error_message})
+        request_data.response_body = json.dumps({'Message': error_message})
+        request_data.status_code = r.status_code if r is not None else 999
+        request_data.successful_response = False
+
     return request_data
 
 
@@ -122,6 +135,7 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
 
     async with AsyncClient(limits=limits) as client:
         tasks = []
+        endpoint_map = {}  # Map endpoint IDs to endpoint objects
         for endpoint in endpoints:
             # Check if the webhook URL is valid
             if not endpoint.webhook_url.startswith(acceptable_url_schemes):
@@ -145,12 +159,46 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                 webhook_request(client, url, endpoint.id, webhook_sig=sig_hex, data=loaded_payload)
             )
             tasks.append(task)
+            endpoint_map[endpoint.id] = endpoint
+
         webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
         for response in webhook_responses:
-            if not isinstance(response, RequestData):
-                app_logger.info('No response from endpoint %s: %s. %s', endpoint.id, endpoint.webhook_url, response)
+            if isinstance(response, Exception):
+                app_logger.info('Error from endpoint: %s', response)
+                # Create a webhook log for the exception
+                webhook_logs.append(
+                    WebhookLog(
+                        webhook_endpoint_id=endpoint.id,
+                        request_headers=json.dumps({'Message': 'Error occurred'}),
+                        request_body=payload,
+                        response_headers=json.dumps({'Message': str(response)}),
+                        response_body=json.dumps({'Message': str(response)}),
+                        status='Error',
+                        status_code=999,
+                    )
+                )
+                total_failed += 1
                 continue
-            elif not response.successful_response:
+
+            if not isinstance(response, RequestData):
+                app_logger.info('No response from endpoint: %s', response)
+                # Create a webhook log for the invalid response
+                webhook_logs.append(
+                    WebhookLog(
+                        webhook_endpoint_id=endpoint.id,
+                        request_headers=json.dumps({'Message': 'Invalid response'}),
+                        request_body=payload,
+                        response_headers=json.dumps({'Message': str(response)}),
+                        response_body=json.dumps({'Message': str(response)}),
+                        status='Error',
+                        status_code=999,
+                    )
+                )
+                total_failed += 1
+                continue
+
+            endpoint = endpoint_map.get(response.endpoint_id)
+            if not response.successful_response and endpoint:
                 app_logger.info('No response from endpoint %s: %s', endpoint.id, endpoint.webhook_url)
 
             if response.status_code in {200, 201, 202, 204}:
@@ -183,15 +231,29 @@ def task_send_webhooks(
     """
     Send the webhook to the relevant endpoints
     """
-    loaded_payload = json.loads(payload)
-    loaded_payload['_request_time'] = loaded_payload.pop('request_time')
-    qlength = get_qlength()
+    try:
+        loaded_payload = json.loads(payload)
+        if isinstance(loaded_payload, str):
+            loaded_payload = json.loads(loaded_payload)
+    except json.JSONDecodeError:
+        app_logger.error('Invalid JSON payload: %s', payload)
+        return
 
-    if loaded_payload.get('events'):
-        branch_id = loaded_payload['events'][0]['branch']
+    # Handle request_time field if present
+    if '_request_time' in loaded_payload:
+        loaded_payload['request_time'] = loaded_payload.pop('_request_time')
+
+    # Extract branch ID
+    if 'events' in loaded_payload and loaded_payload['events']:
+        branch_id = loaded_payload['events'][0].get('branch')
     else:
-        branch_id = loaded_payload['branch_id']
+        branch_id = loaded_payload.get('branch_id')
 
+    if not branch_id:
+        app_logger.error('No branch ID found in payload: %s', payload)
+        return
+
+    qlength = get_qlength()
     if qlength > 100:
         app_logger.error('Queue is too long. Check workers and speeds.')
 
@@ -205,9 +267,20 @@ def task_send_webhooks(
             )
             endpoints = db.exec(endpoints_query).all()
 
-            webhook_logs, total_success, total_failed = asyncio.run(
-                _async_post_webhooks(endpoints, url_extension, payload)
-            )
+            if not endpoints:
+                app_logger.info('No active endpoints found for branch %s', branch_id)
+                return
+
+            # Create a new event loop for this task
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                webhook_logs, total_success, total_failed = loop.run_until_complete(
+                    _async_post_webhooks(endpoints, url_extension, json.dumps(loaded_payload))
+                )
+            finally:
+                loop.close()
+
             for webhook_log in webhook_logs:
                 db.add(webhook_log)
             db.commit()
