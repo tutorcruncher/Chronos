@@ -11,7 +11,7 @@ import logfire
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from celery.app import Celery
 from fastapi import APIRouter, FastAPI
-from httpx import AsyncClient, Limits, Retry
+from httpx import AsyncClient, Limits
 from redis import Redis
 from sqlalchemy import delete, func
 from sqlmodel import Session, select
@@ -27,17 +27,8 @@ celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_
 celery_app.conf.broker_connection_retry_on_startup = True
 cache = Redis.from_url(settings.redis_url)
 
-# Configure retry strategy
-retry_strategy = Retry(
-    total=3,  # Maximum number of retries
-    backoff_factor=0.5,  # Exponential backoff factor
-    status_forcelist=[500, 502, 503, 504],  # HTTP status codes to retry on
-    allowed_methods=['POST'],  # Only retry POST requests
-)
-
 # Configure connection pooling
 limits = Limits(max_connections=250, max_keepalive_connections=50, keepalive_expiry=60)
-
 
 async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, webhook_sig: str, data: dict = None):
     """
@@ -56,28 +47,53 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
         'Content-Type': 'application/json',
         'webhook-signature': webhook_sig,
     }
-
+    
     with logfire.span('{method=} {url!r}', url=url, method='POST'):
         r = None
-        try:
-            r = await client.post(
-                url=url, json=data, headers=headers, timeout=settings.webhook_timeout, retry=retry_strategy
-            )
-        except httpx.TimeoutException as terr:
-            app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
-        except httpx.HTTPError as httperr:
-            app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
-
+        max_retries = 3
+        retry_delay = 0.5  # Initial delay in seconds
+        
+        for attempt in range(max_retries):
+            try:
+                r = await client.post(
+                    url=url,
+                    json=data,
+                    headers=headers,
+                    timeout=settings.webhook_timeout
+                )
+                if r.status_code in [500, 502, 503, 504] and attempt < max_retries - 1:
+                    app_logger.info('Retrying request to %s after status code %s (attempt %s/%s)',
+                                  url, r.status_code, attempt + 1, max_retries)
+                    await asyncio.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+                    continue
+                break
+            except httpx.TimeoutException as terr:
+                if attempt < max_retries - 1:
+                    app_logger.info('Timeout error sending webhook to %s: %s (attempt %s/%s)',
+                                  url, terr, attempt + 1, max_retries)
+                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    continue
+                app_logger.info('Final timeout error sending webhook to %s: %s', url, terr)
+            except httpx.HTTPError as httperr:
+                if attempt < max_retries - 1:
+                    app_logger.info('HTTP error sending webhook to %s: %s (attempt %s/%s)',
+                                  url, httperr, attempt + 1, max_retries)
+                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    continue
+                app_logger.info('Final HTTP error sending webhook to %s: %s', url, httperr)
+    
     request_data = RequestData(
-        endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=json.dumps(data)
+        endpoint_id=endpoint_id,
+        request_headers=json.dumps(headers),
+        request_body=json.dumps(data)
     )
-
+    
     if r is not None:
         request_data.response_headers = json.dumps(dict(r.headers))
         request_data.response_body = json.dumps(r.content.decode())
         request_data.status_code = r.status_code
         request_data.successful_response = True
-
+    
     return request_data
 
 

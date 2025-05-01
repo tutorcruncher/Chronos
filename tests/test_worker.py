@@ -345,13 +345,13 @@ class TestWorkers:
 
         payload = get_dft_webhook_data()
         headers = _get_webhook_headers()
-
+        
         # Mock a sequence of responses: first two 500s, then success
         mock_request = respx.post(ep.webhook_url).mock(
             side_effect=[
-                httpx.Response(500, json={'error': 'Internal Server Error'}),
-                httpx.Response(500, json={'error': 'Internal Server Error'}),
-                get_successful_response(payload, headers),
+                httpx.Response(500, json={"error": "Internal Server Error"}),
+                httpx.Response(500, json={"error": "Internal Server Error"}),
+                get_successful_response(payload, headers)
             ]
         )
 
@@ -359,13 +359,74 @@ class TestWorkers:
         assert len(endpoints) == 1
 
         # Run the webhook task
-        task_send_webhooks(payload, None)
+        task_send_webhooks(json.dumps(payload), None)
 
         # Verify the request was retried and eventually succeeded
         assert mock_request.call_count == 3
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 1
         assert webhooks[0].status_code == 200
+
+    @respx.mock
+    def test_webhook_retry_timeout(self, db: Session, client: TestClient, celery_session_worker):
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
+        
+        # Mock a sequence of responses: first two timeouts, then success
+        mock_request = respx.post(ep.webhook_url).mock(
+            side_effect=[
+                httpx.TimeoutException("Request timed out"),
+                httpx.TimeoutException("Request timed out"),
+                get_successful_response(payload, headers)
+            ]
+        )
+
+        endpoints = db.exec(select(WebhookEndpoint)).all()
+        assert len(endpoints) == 1
+
+        # Run the webhook task
+        task_send_webhooks(json.dumps(payload), None)
+
+        # Verify the request was retried and eventually succeeded
+        assert mock_request.call_count == 3
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+        assert webhooks[0].status_code == 200
+
+    @respx.mock
+    def test_webhook_retry_max_attempts(self, db: Session, client: TestClient, celery_session_worker):
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        headers = _get_webhook_headers()
+        
+        # Mock a sequence of responses: all 500s to test max retries
+        mock_request = respx.post(ep.webhook_url).mock(
+            side_effect=[
+                httpx.Response(500, json={"error": "Internal Server Error"}),
+                httpx.Response(500, json={"error": "Internal Server Error"}),
+                httpx.Response(500, json={"error": "Internal Server Error"}),
+                httpx.Response(500, json={"error": "Internal Server Error"})
+            ]
+        )
+
+        endpoints = db.exec(select(WebhookEndpoint)).all()
+        assert len(endpoints) == 1
+
+        # Run the webhook task
+        task_send_webhooks(json.dumps(payload), None)
+
+        # Verify the request was retried exactly 3 times (initial + 2 retries)
+        assert mock_request.call_count == 3
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+        assert webhooks[0].status_code == 500
 
     @respx.mock
     def test_webhook_connection_pooling(self, db: Session, client: TestClient, celery_session_worker):
@@ -383,7 +444,7 @@ class TestWorkers:
             respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
 
         # Run the webhook task
-        task_send_webhooks(payload, None)
+        task_send_webhooks(json.dumps(payload), None)
 
         # Verify all webhooks were sent successfully
         webhooks = db.exec(select(WebhookLog)).all()
