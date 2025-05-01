@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
 from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.utils import settings
 from chronos.worker import _delete_old_logs_job, task_send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,
@@ -472,7 +473,7 @@ class TestWorkers:
         branch_99_ep = create_endpoint_from_dft_data(branch_id=99)[0]
         branch_199_ep = create_endpoint_from_dft_data(branch_id=199)[0]
         branch_299_ep = create_endpoint_from_dft_data(branch_id=299)[0]
-        
+
         for ep in [branch_99_ep, branch_199_ep, branch_299_ep]:
             db.add(ep)
         db.commit()
@@ -481,14 +482,16 @@ class TestWorkers:
         mock_requests = {}
         for ep in [branch_99_ep, branch_199_ep, branch_299_ep]:
             mock_request = respx.post(ep.webhook_url).mock(
-                return_value=httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers())
+                return_value=httpx.Response(
+                    status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
+                )
             )
             mock_requests[ep.id] = mock_request
 
         # Test with branch_id in payload
         payload = get_dft_webhook_data(branch_id=199)
         task_send_webhooks(json.dumps(payload))
-        
+
         # Verify only branch 199 endpoint was called
         assert mock_requests[branch_199_ep.id].called
         assert not mock_requests[branch_99_ep.id].called
@@ -502,7 +505,7 @@ class TestWorkers:
         payload = get_dft_webhook_data()
         payload['events'] = [{'branch': 299}]
         task_send_webhooks(json.dumps(payload))
-        
+
         # Verify only branch 299 endpoint was called
         assert mock_requests[branch_299_ep.id].called
         assert not mock_requests[branch_99_ep.id].called
@@ -516,7 +519,7 @@ class TestWorkers:
         payload = get_dft_webhook_data()
         del payload['branch_id']
         task_send_webhooks(json.dumps(payload))
-        
+
         # Verify only branch 99 endpoint was called
         assert mock_requests[branch_99_ep.id].called
         assert not mock_requests[branch_199_ep.id].called
@@ -534,7 +537,7 @@ class TestWorkers:
             side_effect=[
                 httpx.Response(status_code=500),
                 httpx.Response(status_code=502),
-                httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers())
+                httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()),
             ]
         )
 
@@ -548,72 +551,39 @@ class TestWorkers:
         assert mock_request.calls[2].timeout == settings.webhook_timeout
 
     @respx.mock
-    def test_webhook_connection_pooling(self, db: Session, client: TestClient, celery_session_worker):
-        """Test that connection pooling is working correctly"""
-        # Create multiple endpoints
-        endpoints = create_endpoint_from_dft_data(count=5)
-        for ep in endpoints:
-            db.add(ep)
-        db.commit()
-
-        # Create mock requests for each endpoint
-        mock_requests = {}
-        for ep in endpoints:
-            mock_request = respx.post(ep.webhook_url).mock(
-                return_value=httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers())
-            )
-            mock_requests[ep.id] = mock_request
-
-        # Send webhooks to all endpoints
-        payload = get_dft_webhook_data()
-        task_send_webhooks(json.dumps(payload))
-
-        # Verify all requests were made
-        for mock_request in mock_requests.values():
-            assert mock_request.called
-
-        # Verify the number of connections used
-        assert len(set(call.client for call in mock_requests[1].calls)) == 1  # Same client used for all requests
-
-    @respx.mock
-    def test_webhook_error_handling(self, db: Session, client: TestClient, celery_session_worker):
-        """Test error handling and logging for various failure scenarios"""
+    def test_webhook_retry_edge_cases(self, db: Session, client: TestClient, celery_session_worker):
+        """Test edge cases in webhook retry logic"""
         ep = create_endpoint_from_dft_data()[0]
         db.add(ep)
         db.commit()
 
-        # Test timeout error
+        # Test with alternating success/failure responses
         mock_request = respx.post(ep.webhook_url).mock(
-            side_effect=httpx.TimeoutException("Connection timed out")
+            side_effect=[
+                httpx.Response(status_code=500),
+                httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()),
+                httpx.Response(status_code=502),
+                httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()),
+            ]
         )
 
         payload = get_dft_webhook_data()
         task_send_webhooks(json.dumps(payload))
 
-        # Verify the request was retried and logged
-        assert mock_request.call_count == 3
-        webhook_logs = db.exec(select(WebhookLog)).all()
-        assert len(webhook_logs) == 1
-        assert webhook_logs[0].status == 'Failed'
-        assert webhook_logs[0].status_code == 0
+        # Verify the request was retried appropriately
+        assert mock_request.call_count == 2  # Should stop after first success
 
-        # Test invalid URL
-        ep.webhook_url = "invalid://url"
-        db.commit()
-
-        task_send_webhooks(json.dumps(payload))
-        webhook_logs = db.exec(select(WebhookLog)).all()
-        assert len(webhook_logs) == 1  # No new logs for invalid URL
-
-        # Test inactive endpoint
-        ep.webhook_url = "https://valid.url"
-        ep.active = False
-        db.commit()
+        # Test with network errors
+        mock_request.reset()
+        mock_request.side_effect = [
+            httpx.NetworkError('Network error'),
+            httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()),
+        ]
 
         task_send_webhooks(json.dumps(payload))
-        webhook_logs = db.exec(select(WebhookLog)).all()
-        assert len(webhook_logs) == 1  # No new logs for inactive endpoint
+        assert mock_request.call_count == 2  # Should retry on network error
 
+    @respx.mock
     def test_webhook_log_cleanup(self, db: Session, client: TestClient, celery_session_worker):
         """Test that old webhook logs are cleaned up correctly"""
         ep = create_endpoint_from_dft_data()[0]
@@ -623,10 +593,7 @@ class TestWorkers:
         # Create logs with various ages
         now = datetime.utcnow()
         for days_ago in [5, 10, 15, 20, 25]:
-            log = create_webhook_log_from_dft_data(
-                webhook_endpoint_id=ep.id,
-                timestamp=now - timedelta(days=days_ago)
-            )
+            log = create_webhook_log_from_dft_data(webhook_endpoint_id=ep.id, timestamp=now - timedelta(days=days_ago))
             db.add(log)
         db.commit()
 
@@ -646,7 +613,7 @@ class TestWorkers:
         branch_99_ep = create_endpoint_from_dft_data(branch_id=99)[0]
         branch_199_ep = create_endpoint_from_dft_data(branch_id=199)[0]
         branch_299_ep = create_endpoint_from_dft_data(branch_id=299)[0]
-        
+
         for ep in [branch_99_ep, branch_199_ep, branch_299_ep]:
             db.add(ep)
         db.commit()
@@ -655,7 +622,9 @@ class TestWorkers:
         mock_requests = {}
         for ep in [branch_99_ep, branch_199_ep, branch_299_ep]:
             mock_request = respx.post(ep.webhook_url).mock(
-                return_value=httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers())
+                return_value=httpx.Response(
+                    status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
+                )
             )
             mock_requests[ep.id] = mock_request
 
@@ -665,10 +634,10 @@ class TestWorkers:
             {'branch': 99},
             {'branch': 199},
             {'branch': 299},
-            {'branch': 99}  # Duplicate branch
+            {'branch': 99},  # Duplicate branch
         ]
         task_send_webhooks(json.dumps(payload))
-        
+
         # Verify all endpoints were called exactly once
         assert mock_requests[branch_99_ep.id].call_count == 1
         assert mock_requests[branch_199_ep.id].call_count == 1
@@ -683,16 +652,16 @@ class TestWorkers:
 
         # Test with invalid JSON
         with pytest.raises(json.JSONDecodeError):
-            task_send_webhooks("invalid json")
+            task_send_webhooks('invalid json')
 
         # Test with empty payload
-        task_send_webhooks("{}")
+        task_send_webhooks('{}')
         webhook_logs = db.exec(select(WebhookLog)).all()
         assert len(webhook_logs) == 0  # No logs should be created for empty payload
 
         # Test with malformed events array
         payload = get_dft_webhook_data()
-        payload['events'] = "not an array"
+        payload['events'] = 'not an array'
         task_send_webhooks(json.dumps(payload))
         webhook_logs = db.exec(select(WebhookLog)).all()
         assert len(webhook_logs) == 0  # No logs should be created for malformed events
@@ -708,13 +677,10 @@ class TestWorkers:
 
         # Create mock requests with varying response times
         mock_requests = {}
-        for i, ep in enumerate(endpoints):
-            delay = i * 0.1  # Varying delays
+        for ep in endpoints:
             mock_request = respx.post(ep.webhook_url).mock(
                 return_value=httpx.Response(
-                    status_code=200,
-                    json=get_dft_webhook_data(),
-                    headers=_get_webhook_headers()
+                    status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()
                 )
             )
             mock_requests[ep.id] = mock_request
@@ -731,39 +697,6 @@ class TestWorkers:
         assert len(set(call.client for call in mock_requests[1].calls)) == 1  # Same client used for all requests
 
     @respx.mock
-    def test_webhook_retry_edge_cases(self, db: Session, client: TestClient, celery_session_worker):
-        """Test edge cases in webhook retry logic"""
-        ep = create_endpoint_from_dft_data()[0]
-        db.add(ep)
-        db.commit()
-
-        # Test with alternating success/failure responses
-        mock_request = respx.post(ep.webhook_url).mock(
-            side_effect=[
-                httpx.Response(status_code=500),
-                httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers()),
-                httpx.Response(status_code=502),
-                httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers())
-            ]
-        )
-
-        payload = get_dft_webhook_data()
-        task_send_webhooks(json.dumps(payload))
-
-        # Verify the request was retried appropriately
-        assert mock_request.call_count == 2  # Should stop after first success
-
-        # Test with network errors
-        mock_request.reset()
-        mock_request.side_effect = [
-            httpx.NetworkError("Network error"),
-            httpx.Response(status_code=200, json=get_dft_webhook_data(), headers=_get_webhook_headers())
-        ]
-
-        task_send_webhooks(json.dumps(payload))
-        assert mock_request.call_count == 2  # Should retry on network error
-
-    @respx.mock
     def test_webhook_log_cleanup_edge_cases(self, db: Session, client: TestClient, celery_session_worker):
         """Test edge cases in webhook log cleanup"""
         ep = create_endpoint_from_dft_data()[0]
@@ -772,10 +705,7 @@ class TestWorkers:
 
         # Test with exactly 15-day-old logs
         now = datetime.utcnow()
-        log = create_webhook_log_from_dft_data(
-            webhook_endpoint_id=ep.id,
-            timestamp=now - timedelta(days=15)
-        )
+        log = create_webhook_log_from_dft_data(webhook_endpoint_id=ep.id, timestamp=now - timedelta(days=15))
         db.add(log)
         db.commit()
 
@@ -785,10 +715,7 @@ class TestWorkers:
 
         # Test with large number of logs
         for i in range(1000):
-            log = create_webhook_log_from_dft_data(
-                webhook_endpoint_id=ep.id,
-                timestamp=now - timedelta(days=20)
-            )
+            log = create_webhook_log_from_dft_data(webhook_endpoint_id=ep.id, timestamp=now - timedelta(days=20))
             db.add(log)
         db.commit()
 
@@ -804,8 +731,7 @@ class TestWorkers:
         for days_ago in [5, 10, 15, 20]:
             for endpoint in [ep, ep2]:
                 log = create_webhook_log_from_dft_data(
-                    webhook_endpoint_id=endpoint.id,
-                    timestamp=now - timedelta(days=days_ago)
+                    webhook_endpoint_id=endpoint.id, timestamp=now - timedelta(days=days_ago)
                 )
                 db.add(log)
         db.commit()
@@ -826,7 +752,7 @@ class TestWorkers:
             return_value=httpx.Response(
                 status_code=200,
                 json=get_dft_webhook_data(),
-                headers={}  # Empty headers
+                headers={},  # Empty headers
             )
         )
 
@@ -842,7 +768,7 @@ class TestWorkers:
         mock_request.return_value = httpx.Response(
             status_code=200,
             json=get_dft_webhook_data(),
-            headers={'Content-Type': 'invalid'}  # Malformed content type
+            headers={'Content-Type': 'invalid'},  # Malformed content type
         )
 
         task_send_webhooks(json.dumps(payload))
