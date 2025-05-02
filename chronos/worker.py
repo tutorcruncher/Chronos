@@ -1,5 +1,4 @@
 import asyncio
-import gc
 import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -186,81 +185,96 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
         app_logger.error('Empty payload')
         return [], total_success, total_failed
 
-    # Filter endpoints based on branch_id if present in events
+    # Extract branch IDs from payload
     target_branch_ids = set()
-    if 'events' in loaded_payload:
+
+    # If branch_id is explicitly set in the payload, it overrides any branch IDs in events
+    if 'branch_id' in loaded_payload:
+        target_branch_ids = {loaded_payload['branch_id']}
+    # Otherwise, look for branch IDs in events
+    elif 'events' in loaded_payload:
         if not isinstance(loaded_payload['events'], list):
             app_logger.error('Invalid events format: expected array')
             return [], total_success, total_failed
         for event in loaded_payload['events']:
             if isinstance(event, dict) and 'branch' in event:
                 target_branch_ids.add(event['branch'])
-        if not target_branch_ids:  # If no valid branch IDs found in events, use default
-            target_branch_ids.add(99)
-    elif 'branch_id' in loaded_payload:
-        target_branch_ids.add(loaded_payload['branch_id'])
-    else:
-        # If no branch_id is specified, only process endpoints with branch_id 99 (default)
-        target_branch_ids.add(99)  # Default branch_id
 
-    # Process all endpoints that match any target branch_id
-    # Use a dictionary to ensure each endpoint is only processed once
-    filtered_endpoints = {}
+    # Only default to branch 99 if no branch information is present in the payload
+    if not target_branch_ids:
+        app_logger.info('No branch IDs found in payload, defaulting to branch 99')
+        target_branch_ids.add(99)
+
+    # Filter and validate endpoints
+    valid_endpoints = {}  # Use dict to deduplicate by URL
     for endpoint in endpoints:
-        if endpoint.branch_id in target_branch_ids:
-            filtered_endpoints[endpoint.id] = endpoint
+        # Skip inactive endpoints
+        if not endpoint.active:
+            app_logger.info('Skipping inactive endpoint: %s', endpoint.id)
+            continue
 
-    if not filtered_endpoints:
-        app_logger.info('No matching endpoints found for branch_ids: %s', target_branch_ids)
+        # Skip endpoints with invalid URLs
+        if not endpoint.webhook_url:
+            app_logger.error('Skipping endpoint with no URL: %s', endpoint.id)
+            continue
+
+        # Validate URL scheme
+        if not any(endpoint.webhook_url.startswith(scheme + '://') for scheme in acceptable_url_schemes):
+            app_logger.error(
+                'Skipping endpoint with invalid URL scheme: %s (%s)',
+                endpoint.webhook_url,
+                endpoint.id,
+            )
+            continue
+
+        # Check branch ID - only send if endpoint's branch matches a target branch
+        if endpoint.branch_id in target_branch_ids:
+            # Deduplicate by URL - only keep one endpoint per URL
+            valid_endpoints[endpoint.webhook_url] = endpoint
+            app_logger.info('Adding endpoint %s for branch %s', endpoint.id, endpoint.branch_id)
+        else:
+            app_logger.info(
+                'Skipping endpoint %s for branch %s (not in target branches %s)',
+                endpoint.id,
+                endpoint.branch_id,
+                target_branch_ids,
+            )
+
+    if not valid_endpoints:
+        app_logger.info('No valid endpoints found for branch IDs: %s', target_branch_ids)
         return [], total_success, total_failed
 
-    # Create a single client for all requests to enable connection pooling
-    async with httpx.AsyncClient(limits=limits) as client:
+    # Create a connection pool for all requests
+    async with AsyncClient(limits=limits) as client:
         tasks = []
-        active_endpoints = []
-        for endpoint in filtered_endpoints.values():
-            if not endpoint.active:
-                app_logger.info('Skipping inactive endpoint: %s', endpoint.id)
+        for endpoint in valid_endpoints.values():
+            task = asyncio.create_task(_try_send_webhook(client, endpoint, loaded_payload))
+            tasks.append(task)
+
+        # Wait for all tasks to complete
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for endpoint, result in zip(valid_endpoints.values(), results):
+            if isinstance(result, Exception):
+                app_logger.error('Error processing webhook for endpoint %s: %s', endpoint.id, str(result))
+                total_failed += 1
                 continue
 
-            # Check if the webhook URL is valid
-            if not endpoint.webhook_url or not any(
-                endpoint.webhook_url.startswith(scheme) for scheme in acceptable_url_schemes
-            ):
-                app_logger.error(
-                    'Webhook URL does not start with an acceptable url scheme: %s (%s)',
-                    endpoint.webhook_url,
-                    endpoint.id,
-                )
-                continue
-
-            tasks.append(_try_send_webhook(client, endpoint, loaded_payload))
-            active_endpoints.append(endpoint)
-
-        # Run all tasks concurrently
-        results = await asyncio.gather(*tasks)
-
-        for endpoint, result in zip(active_endpoints, results):
             response, status = result
+            webhook_log = WebhookLog(
+                webhook_endpoint_id=endpoint.id,
+                status=status,
+                status_code=response.status_code if response else 999,
+                request_body=json.dumps(loaded_payload),
+                response_body=response.content.decode() if response else 'Error: No response',
+                timestamp=datetime.now(UTC),
+            )
+            webhook_logs.append(webhook_log)
+
             if status == 'Success':
                 total_success += 1
-                app_logger.info('Successfully sent webhook to endpoint %s', endpoint.id)
             else:
                 total_failed += 1
-                app_logger.info('Failed to send webhook to endpoint %s', endpoint.id)
-
-            webhook_logs.append(
-                WebhookLog(
-                    webhook_endpoint_id=endpoint.id,
-                    request_headers=json.dumps(_get_webhook_headers()),
-                    request_body=json.dumps(loaded_payload),
-                    response_headers=json.dumps(dict(response.headers) if response else {}),
-                    response_body=response.text if response else str(response),
-                    status=status,
-                    status_code=response.status_code if response else 0,
-                    timestamp=datetime.utcnow(),
-                )
-            )
 
     return webhook_logs, total_success, total_failed
 
@@ -334,7 +348,9 @@ def get_count(date_to_delete_before: datetime) -> int:
         count = (
             db.query(WebhookLog)
             .with_entities(func.count())
-            .where(WebhookLog.timestamp < date_to_delete_before)  # Use < to keep exactly 15-day-old logs
+            .where(
+                WebhookLog.timestamp < date_to_delete_before - timedelta(minutes=1)
+            )  # Add 1 minute buffer to ensure we keep 14.99-day-old logs
             .scalar()
         )
     return count
@@ -344,19 +360,20 @@ def get_count(date_to_delete_before: datetime) -> int:
 def _delete_old_logs_job():
     """Delete webhook logs older than 15 days"""
     with Session(engine) as db:
-        date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
-        # Add a small buffer to ensure we keep logs that are exactly 15 days old
-        date_to_delete_before = date_to_delete_before.replace(microsecond=0)
-        count = get_count(date_to_delete_before)
-        if count > 0:
-            app_logger.info('Deleting %d webhook logs older than %s', count, date_to_delete_before)
-            stmt = delete(WebhookLog).where(
-                WebhookLog.timestamp < date_to_delete_before
-            )  # Use < to keep exactly 15-day-old logs
-            db.execute(stmt)
-            db.commit()
-            gc.collect()  # Force garbage collection after large delete
-        else:
-            app_logger.info('No webhook logs to delete')
+        # Calculate the cutoff date (15 days ago)
+        now = datetime.now(UTC)
+        cutoff_date = now - timedelta(days=15)
+
+        # Delete logs older than 15 days (not including logs exactly 15 days old)
+        # Use a small buffer to ensure we keep logs that are just under 15 days old
+        stmt = delete(WebhookLog).where(WebhookLog.timestamp < cutoff_date - timedelta(minutes=1))
+        result = db.execute(stmt)
+        db.commit()
+
+        # Log the operation
+        app_logger.info('Deleting webhook logs older than %s', cutoff_date)
+        app_logger.info('Deleted %s old webhook logs', result.rowcount)
+
+        return result.rowcount
 
     cache.delete(DELETE_JOBS_KEY)

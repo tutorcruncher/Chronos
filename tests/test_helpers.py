@@ -39,11 +39,12 @@ def get_dft_endpoint_deletion_data(**kwargs) -> dict:
 
 
 def get_dft_webhook_data(branch_id: int = None, **kwargs) -> dict:
-    branch_id = branch_id or 99
     webhook_dict = {
-        'events': [{'branch': branch_id, 'event': 'test_event', 'data': {'test': 'data'}}],
+        'events': [{'event': 'test_event', 'data': {'test': 'data'}}],
         'request_time': 1234567890,
     }
+    if branch_id is not None:
+        webhook_dict['branch_id'] = branch_id
     for k, v in kwargs.items():
         if v is not None:
             webhook_dict[k] = v

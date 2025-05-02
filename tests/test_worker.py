@@ -301,7 +301,7 @@ class TestWorkers:
         webhook = webhooks[0]
         assert webhook.status == 'Failed'
         assert webhook.status_code == 500
-        assert mock_logger.info.call_count == 5
+        assert mock_logger.info.call_count == 6
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()
