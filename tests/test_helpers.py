@@ -1,7 +1,9 @@
+import hashlib
+import hmac
 import json
 
+import httpx
 from httpx import Response
-from requests import Request
 
 from chronos.main import app
 from chronos.sql_models import WebhookEndpoint, WebhookLog
@@ -142,22 +144,28 @@ def create_webhook_log_from_dft_data(**kwargs) -> WebhookLog:
 
 
 def get_successful_response(payload, headers, **kwargs) -> Response:
-    response_dict = {'status_code': 200, 'message': 'success'}
+    response_dict = {'status': 'success', 'message': 'success'}
     for k, v in kwargs.items():
         response_dict[k] = v
-    request = Request()
-    request.headers = headers
-    request.body = json.dumps(payload).encode()
-    response = Response(status_code=200, request=request, content=json.dumps(response_dict).encode())
-    return response
+    headers = headers.copy()
+    headers['webhook-signature'] = hmac.new(b'test_key', json.dumps(payload).encode(), hashlib.sha256).hexdigest()
+    return Response(
+        status_code=200,
+        json=response_dict,
+        request=httpx.Request('POST', 'https://example.com', json=payload, headers=headers),
+        headers=headers,
+    )
 
 
 def get_failed_response(payload, headers, **kwargs) -> Response:
-    response_dict = {'status_code': 409, 'message': 'Bad request'}
+    response_dict = {'status': 'error', 'message': 'Bad request'}
     for k, v in kwargs.items():
         response_dict[k] = v
-    request = Request()
-    request.headers = headers
-    request.body = json.dumps(payload).encode()
-    response = Response(status_code=409, request=request, content=json.dumps(response_dict).encode())
-    return response
+    headers = headers.copy()
+    headers['webhook-signature'] = hmac.new(b'test_key', json.dumps(payload).encode(), hashlib.sha256).hexdigest()
+    return Response(
+        status_code=409,
+        json=response_dict,
+        request=httpx.Request('POST', 'https://example.com', json=payload, headers=headers),
+        headers=headers,
+    )
