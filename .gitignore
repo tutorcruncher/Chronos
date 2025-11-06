@@ -17,3 +17,5 @@ __pycache__
 *.dump
 
 /.logfire/
+
+.DS_Store
