@@ -19,20 +19,33 @@ import sys
 from datetime import datetime, timedelta, UTC
 from typing import List, Tuple
 
-import logfire
 from sqlalchemy import text
 from sqlmodel import Session
 
 from chronos.db import engine
 from chronos.utils import app_logger, settings
 
-# Configure logfire if available
-if settings.logfire_token:
-    logfire.configure(
-        service_name='chronos-migration',
-        token=settings.logfire_token,
-        send_to_logfire=True,
-    )
+# Optional logfire import
+try:
+    import logfire
+    # Configure logfire if available
+    if settings.logfire_token:
+        logfire.configure(
+            service_name='chronos-migration',
+            token=settings.logfire_token,
+            send_to_logfire=True,
+        )
+except ImportError:
+    # Create a no-op logfire object for testing
+    class NoOpLogfire:
+        class span:
+            def __init__(self, *args, **kwargs):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+    logfire = NoOpLogfire()
 
 
 def get_partition_name(date: datetime) -> str:
@@ -72,7 +85,7 @@ def create_partitioned_table(session: Session) -> None:
     app_logger.info("Creating partitioned webhook_log table...")
 
     create_table_sql = text("""
-        CREATE TABLE webhook_log (
+        CREATE TABLE webhooklog (
             id SERIAL,
             request_headers JSONB,
             request_body JSONB,
@@ -94,8 +107,8 @@ def create_partitioned_table(session: Session) -> None:
     # Create indexes on the partitioned table
     # These will be automatically created on each partition
     create_indexes_sql = [
-        text("CREATE INDEX ix_webhook_log_timestamp ON webhook_log (timestamp);"),
-        text("CREATE INDEX ix_webhook_log_webhook_endpoint_id ON webhook_log (webhook_endpoint_id);"),
+        text("CREATE INDEX ix_webhook_log_timestamp ON webhooklog (timestamp);"),
+        text("CREATE INDEX ix_webhook_log_webhook_endpoint_id ON webhooklog (webhook_endpoint_id);"),
     ]
 
     for sql in create_indexes_sql:
@@ -107,7 +120,7 @@ def create_partitioned_table(session: Session) -> None:
 def create_partition(session: Session, range_start: datetime, range_end: datetime, partition_name: str) -> None:
     """Create a single partition for the specified date range."""
     create_partition_sql = text(f"""
-        CREATE TABLE {partition_name} PARTITION OF webhook_log
+        CREATE TABLE {partition_name} PARTITION OF webhooklog
         FOR VALUES FROM ('{range_start.isoformat()}') TO ('{range_end.isoformat()}');
     """)
 
@@ -144,7 +157,7 @@ def migrate_data_in_batches(session: Session, batch_size: int = 1000) -> None:
 
     # Get total count to migrate
     count_sql = text("""
-        SELECT COUNT(*) FROM webhook_log_old
+        SELECT COUNT(*) FROM webhooklog_old
         WHERE timestamp >= :cutoff_date
     """)
     total_rows = session.exec(count_sql, {"cutoff_date": cutoff_date}).scalar()
@@ -163,13 +176,13 @@ def migrate_data_in_batches(session: Session, batch_size: int = 1000) -> None:
         while offset < total_rows:
             # Insert batch
             insert_sql = text(f"""
-                INSERT INTO webhook_log
+                INSERT INTO webhooklog
                     (id, request_headers, request_body, response_headers, response_body,
                      status, status_code, timestamp, webhook_endpoint_id)
                 SELECT
                     id, request_headers, request_body, response_headers, response_body,
                     status, status_code, timestamp, webhook_endpoint_id
-                FROM webhook_log_old
+                FROM webhooklog_old
                 WHERE timestamp >= :cutoff_date
                 ORDER BY timestamp, id
                 LIMIT {batch_size} OFFSET {offset}
@@ -218,7 +231,7 @@ def create_partition_management_functions(session: Session) -> None:
             -- Create partitions for each day from tomorrow to days_ahead
             FOR i IN 1..days_ahead LOOP
                 partition_date := CURRENT_DATE + i;
-                partition_name := 'webhook_log_y' ||
+                partition_name := 'webhooklog_y' ||
                                  TO_CHAR(partition_date, 'YYYY') || 'm' ||
                                  TO_CHAR(partition_date, 'MM') || 'd' ||
                                  TO_CHAR(partition_date, 'DD');
@@ -232,7 +245,7 @@ def create_partition_management_functions(session: Session) -> None:
                     WHERE tablename = partition_name
                 ) THEN
                     EXECUTE format(
-                        'CREATE TABLE %I PARTITION OF webhook_log FOR VALUES FROM (%L) TO (%L)',
+                        'CREATE TABLE %I PARTITION OF webhooklog FOR VALUES FROM (%L) TO (%L)',
                         partition_name,
                         start_date,
                         end_date
@@ -259,7 +272,7 @@ def create_partition_management_functions(session: Session) -> None:
             FOR partition_record IN
                 SELECT tablename
                 FROM pg_tables
-                WHERE tablename LIKE 'webhook_log_y%'
+                WHERE tablename LIKE 'webhooklog_y%'
                 ORDER BY tablename
             LOOP
                 -- Extract date from partition name (format: webhook_log_yYYYYmMMdDD)
@@ -300,7 +313,7 @@ def verify_migration(session: Session) -> bool:
     # Count rows in old table (last 15 days)
     cutoff_date = datetime.now(UTC) - timedelta(days=15)
     old_count_sql = text("""
-        SELECT COUNT(*) FROM webhook_log_old
+        SELECT COUNT(*) FROM webhooklog_old
         WHERE timestamp >= :cutoff_date
     """)
     old_count = session.exec(old_count_sql, {"cutoff_date": cutoff_date}).scalar()
@@ -349,7 +362,7 @@ def run_migration() -> None:
                 # Step 1: Rename existing table
                 app_logger.info("\n[Step 1/6] Renaming existing webhook_log table...")
                 rename_sql = text("""
-                    ALTER TABLE webhook_log RENAME TO webhook_log_old;
+                    ALTER TABLE webhooklog RENAME TO webhook_log_old;
                 """)
                 session.exec(rename_sql)
                 session.commit()
@@ -408,7 +421,7 @@ def run_migration() -> None:
                 app_logger.error("Attempting to restore original table...")
                 restore_sql = text("""
                     DROP TABLE IF EXISTS webhook_log CASCADE;
-                    ALTER TABLE webhook_log_old RENAME TO webhook_log;
+                    ALTER TABLE webhooklog_old RENAME TO webhooklog;
                 """)
                 session.exec(restore_sql)
                 session.commit()
@@ -417,7 +430,7 @@ def run_migration() -> None:
             except Exception as rollback_error:
                 app_logger.error(f"Rollback failed: {rollback_error}")
                 app_logger.error("Manual intervention required!")
-                app_logger.error("Run: DROP TABLE IF EXISTS webhook_log CASCADE; ALTER TABLE webhook_log_old RENAME TO webhook_log;")
+                app_logger.error("Run: DROP TABLE IF EXISTS webhook_log CASCADE; ALTER TABLE webhooklog_old RENAME TO webhooklog;")
 
             sys.exit(1)
 

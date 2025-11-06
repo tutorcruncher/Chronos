@@ -29,16 +29,18 @@ class WebhookLog(SQLModel, table=True):
     """
     The model for the webhook log table.
 
-    NOTE: This table uses PostgreSQL native partitioning by RANGE on timestamp (daily partitions).
+    NOTE: After migration, this table uses PostgreSQL native partitioning by RANGE on timestamp (daily partitions).
     - Partitioned by: timestamp (daily)
     - Retention: 15 days (older partitions are automatically dropped)
     - Composite primary key: (id, timestamp) - required for partitioning
     - Partition management: Automated via Celery scheduled jobs
 
     See chronos/scripts/migrate_to_partitioned_webhook_log.py for migration details.
+
+    IMPORTANT: For testing migration, keep this as single PK (id only) until after migration runs.
     """
 
-    # Composite primary key required for partitioning by timestamp
+    # NOTE: Will become composite (id, timestamp) after migration
     id: Optional[int] = Field(default=None, primary_key=True)
     request_headers: Optional[dict] = Field(nullable=True, sa_type=JSONB)
     request_body: Optional[dict] = Field(nullable=True, sa_type=JSONB)
@@ -49,8 +51,8 @@ class WebhookLog(SQLModel, table=True):
     timestamp: datetime.datetime = Field(
         default_factory=datetime.datetime.utcnow,
         nullable=False,
-        index=True,
-        primary_key=True  # Part of composite primary key for partitioning
+        index=True
+        # Will become part of composite primary key after migration
     )
 
     webhook_endpoint_id: int | None = Field(default=None, foreign_key='webhookendpoint.id', index=True)
