@@ -10,6 +10,7 @@ import httpx
 import logfire
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from celery.app import Celery
+from celery.signals import worker_process_init
 from fastapi import APIRouter, FastAPI
 from httpx import AsyncClient
 from redis import Redis
@@ -26,6 +27,17 @@ cronjob = APIRouter()
 celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.broker_connection_retry_on_startup = True
 cache = Redis.from_url(settings.redis_url)
+
+
+@worker_process_init.connect
+def init_worker_process(**kwargs):
+    """
+    Dispose of the database connection pool when a worker process is forked.
+    This ensures each worker gets fresh connections instead of inheriting
+    stale connections from the parent process, preventing SSL SYSCALL errors.
+    """
+    app_logger.info('Disposing database engine pool for worker process')
+    engine.dispose()
 
 
 async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, webhook_sig: str, data: dict = None):
