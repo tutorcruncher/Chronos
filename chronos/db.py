@@ -7,7 +7,7 @@ from chronos.utils import settings
 
 def get_engine():
     dsn_settings = settings.test_pg_dsn if settings.testing else settings.pg_dsn
-    return create_engine(dsn_settings, echo=settings.dev_mode)
+    return create_engine(dsn_settings, echo=settings.dev_mode, pool_pre_ping=True, pool_recycle=3600)
 
 
 engine = get_engine()
