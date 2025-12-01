@@ -1,25 +1,25 @@
-apscheduler~=3.11.0
-celery~=5.5.3
-cryptography~=46.0.2
+apscheduler~=3.11.1
+celery~=5.6.0
+cryptography~=46.0.3
 docutils~=0.22
-fastapi~=0.119.0
+fastapi~=0.123.0
 fastapi_utilities~=0.3.1
 filelock~=3.20.0
-httpx==0.27.2 # Leave this pinned
-logfire~=4.13.0
-logfire[fastapi, requests, psycopg2, celery]~=4.13.0
-pillow~=11.3.0
-pip~=25.2
+httpx==0.28.1 # Leave this pinned
+logfire~=4.15.1
+logfire[fastapi, requests, psycopg2, celery]~=4.15.1
+pillow~=12.0.0
+pip~=25.3
 psycopg2~=2.9.11
-pydantic~=2.12.0
-pydantic-settings~=2.11.0
-redis~=6.4.0
+pydantic~=2.12.5
+pydantic-settings~=2.12.0
+redis~=7.1.0
 requests~=2.32.5
 respx~=0.22.0
-ruff==0.14.0
-sentry-sdk~=2.41.0
+ruff==0.14.7
+sentry-sdk~=2.46.0
 setuptools~=80.9.0
 SQLAlchemy~=2.0.44
 sqlmodel~=0.0.27
-starlette~=0.48.0
-uvicorn~=0.37.0
+starlette~=0.50.0
+uvicorn~=0.38.0
