@@ -172,7 +172,7 @@ def task_send_webhooks(
     else:
         branch_id = loaded_payload['branch_id']
 
-    if qlength > 100:
+    if qlength > 1000:
         app_logger.error('Queue is too long. Check workers and speeds.')
 
     app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
@@ -200,7 +200,11 @@ def task_send_webhooks(
     )
 
 
-DELETE_JOBS_KEY = 'delete_old_logs_job'
+# DEPRECATED: Old deletion-based cleanup job
+# This job has been replaced by partition-based management (see below).
+# Kept for reference. Remove after migration is confirmed stable.
+
+# DELETE_JOBS_KEY = 'delete_old_logs_job'
 
 scheduler = AsyncIOScheduler(timezone=UTC)
 
@@ -212,52 +216,135 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 
-@scheduler.scheduled_job('interval', hours=1)
-async def delete_old_logs_job():
+# @scheduler.scheduled_job('interval', minutes=1)
+# async def delete_old_logs_job():
+#     """
+#     DEPRECATED: Replaced by partition management jobs.
+#     We run cron job at midnight every day that wipes all WebhookLogs older than 15 days
+#     """
+#     if cache.get(DELETE_JOBS_KEY):
+#         return
+#     else:
+#         cache.set(DELETE_JOBS_KEY, 'True', ex=1200)
+#         _delete_old_logs_job.delay()
+
+
+# def get_count(date_to_delete_before: datetime) -> int:
+#     """
+#     Get the count of all logs
+#     """
+#     with Session(engine) as db:
+#         count = (
+#             db.query(WebhookLog)
+#             .with_entities(func.count())
+#             .where(WebhookLog.timestamp < date_to_delete_before)
+#             .scalar()
+#         )
+#     return count
+
+
+# @celery_app.task
+# def _delete_old_logs_job():
+#     # with logfire.span('Started to delete old logs'):
+#     with Session(engine) as db:
+#         # Get all logs older than 15 days
+#         date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
+#         count = get_count(date_to_delete_before)
+#         delete_limit = 4999
+#         while count > 0:
+#             app_logger.info(f'Deleting {count} logs')
+#             logs_to_delete = db.exec(
+#                 select(WebhookLog.id).where(WebhookLog.timestamp < date_to_delete_before).limit(delete_limit)
+#             ).all()
+#             delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log_id for log_id in logs_to_delete))
+#             db.exec(delete_statement)
+#             db.commit()
+#             count -= delete_limit
+#
+#             del logs_to_delete
+#             del delete_statement
+#             gc.collect()
+#
+#     cache.delete(DELETE_JOBS_KEY)
+
+
+# Partition Management Jobs
+# These jobs replace the delete_old_logs_job for partitioned webhook_log table
+
+CREATE_PARTITIONS_KEY = 'create_future_partitions_job'
+DROP_PARTITIONS_KEY = 'drop_old_partitions_job'
+
+
+@scheduler.scheduled_job('cron', hour=1, minute=0)
+async def create_future_partitions_job():
     """
-    We run cron job at midnight every day that wipes all WebhookLogs older than 15 days
+    Creates future partitions for the webhook_log table.
+    Runs daily at 1:00 AM to create partitions for the next 30 days.
     """
-    if cache.get(DELETE_JOBS_KEY):
+    if cache.get(CREATE_PARTITIONS_KEY):
         return
     else:
-        cache.set(DELETE_JOBS_KEY, 'True', ex=1200)
-        _delete_old_logs_job.delay()
-
-
-def get_count(date_to_delete_before: datetime) -> int:
-    """
-    Get the count of all logs
-    """
-    with Session(engine) as db:
-        count = (
-            db.query(WebhookLog)
-            .with_entities(func.count())
-            .where(WebhookLog.timestamp < date_to_delete_before)
-            .scalar()
-        )
-    return count
+        cache.set(CREATE_PARTITIONS_KEY, 'True', ex=1800)  # 30-minute lock
+        _create_future_partitions_job.delay()
 
 
 @celery_app.task
-def _delete_old_logs_job():
-    # with logfire.span('Started to delete old logs'):
-    with Session(engine) as db:
-        # Get all logs older than 15 days
-        date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
-        count = get_count(date_to_delete_before)
-        delete_limit = 4999
-        while count > 0:
-            app_logger.info(f'Deleting {count} logs')
-            logs_to_delete = db.exec(
-                select(WebhookLog.id).where(WebhookLog.timestamp < date_to_delete_before).limit(delete_limit)
-            ).all()
-            delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log_id for log_id in logs_to_delete))
-            db.exec(delete_statement)
-            db.commit()
-            count -= delete_limit
+def _create_future_partitions_job():
+    """
+    Celery task to create future webhook_log partitions.
+    Calls the PostgreSQL function created during migration.
+    """
+    try:
+        with logfire.span('Creating future webhook_log partitions'):
+            with Session(engine) as db:
+                # Call the SQL function to create next 30 days of partitions
+                from sqlalchemy import text
 
-            del logs_to_delete
-            del delete_statement
-            gc.collect()
+                sql = text("SELECT create_future_webhook_log_partitions(30)")
+                db.exec(sql)
+                db.commit()
 
-    cache.delete(DELETE_JOBS_KEY)
+                app_logger.info('Successfully created future webhook_log partitions')
+    except Exception as e:
+        app_logger.error(f'Error creating future partitions: {e}')
+        raise
+    finally:
+        cache.delete(CREATE_PARTITIONS_KEY)
+
+
+@scheduler.scheduled_job('cron', hour=2, minute=0)
+async def drop_old_partitions_job():
+    """
+    Drops old partitions from the webhook_log table.
+    Runs daily at 2:00 AM to drop partitions older than 15 days.
+    """
+    if cache.get(DROP_PARTITIONS_KEY):
+        return
+    else:
+        cache.set(DROP_PARTITIONS_KEY, 'True', ex=1800)  # 30-minute lock
+        _drop_old_partitions_job.delay()
+
+
+@celery_app.task
+def _drop_old_partitions_job():
+    """
+    Celery task to drop old webhook_log partitions.
+    Calls the PostgreSQL function created during migration.
+    Drops partitions older than 15 days.
+    """
+    try:
+        with logfire.span('Dropping old webhook_log partitions'):
+            with Session(engine) as db:
+                # Call the SQL function to drop partitions older than 15 days
+                from sqlalchemy import text
+
+                sql = text("SELECT drop_old_webhook_log_partitions(15)")
+                db.exec(sql)
+                db.commit()
+
+                app_logger.info('Successfully dropped old webhook_log partitions')
+    except Exception as e:
+        app_logger.error(f'Error dropping old partitions: {e}')
+        raise
+    finally:
+        cache.delete(DROP_PARTITIONS_KEY)
