@@ -118,18 +118,21 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
 
             loaded_payload = json.loads(payload)
 
-            # Zapier triggers fire per-event, so split the events array into individual payloads
             if ZAPIER_WEBHOOK_DOMAIN in endpoint.webhook_url and loaded_payload.get('events'):
-                base_payload = {k: v for k, v in loaded_payload.items() if k != 'events'}
-                payloads_to_send = [{**base_payload, 'events': [event]} for event in loaded_payload['events']]
+                # Zapier triggers fire per-event, so split the events array into individual requests
+                for event in loaded_payload['events']:
+                    single_event_payload = {k: v for k, v in loaded_payload.items() if k != 'events'}
+                    single_event_payload['events'] = [event]
+                    single_event_json = json.dumps(single_event_payload)
+                    sig = hmac.new(endpoint.api_key.encode(), single_event_json.encode(), hashlib.sha256)
+                    task = asyncio.ensure_future(
+                        webhook_request(client, url, endpoint.id, webhook_sig=sig.hexdigest(), data=single_event_payload)
+                    )
+                    tasks.append(task)
             else:
-                payloads_to_send = [loaded_payload]
-
-            for send_payload in payloads_to_send:
-                send_json = json.dumps(send_payload)
-                sig = hmac.new(endpoint.api_key.encode(), send_json.encode(), hashlib.sha256)
+                webhook_sig = hmac.new(endpoint.api_key.encode(), payload.encode(), hashlib.sha256)
                 task = asyncio.ensure_future(
-                    webhook_request(client, url, endpoint.id, webhook_sig=sig.hexdigest(), data=send_payload)
+                    webhook_request(client, url, endpoint.id, webhook_sig=webhook_sig.hexdigest(), data=loaded_payload)
                 )
                 tasks.append(task)
         webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
