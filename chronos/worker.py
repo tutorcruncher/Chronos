@@ -122,12 +122,14 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
             if events is not None:
                 payloads_to_send = []
                 for event in events:
+                    # for batched events requests from TC2 we want to split each action event
+                    # into their individual requests to the downstream endpoint. This is done for reverse compability
+                    # with zapier and other client integration
                     single_event_payload = copy.deepcopy({k: v for k, v in loaded_payload.items() if k != 'events'})
                     single_event_payload['events'] = [copy.deepcopy(event)]
                     payloads_to_send.append(single_event_payload)
             else:
                 payloads_to_send = [copy.deepcopy(loaded_payload)]
-
             for payload_to_send in payloads_to_send:
                 send_json = json.dumps(payload_to_send)
                 sig = hmac.new(endpoint.api_key.encode(), send_json.encode(), hashlib.sha256)
@@ -137,6 +139,8 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                 tasks.append(task)
                 task_endpoints.append((endpoint.id, url))
         webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
+        # webhook responses and tasks endpoints are in task creation order.
+        # zip gives the matching endpoint id url for each result, including exceptions.
         for response, (endpoint_id, endpoint_url) in zip(webhook_responses, task_endpoints):
             if not isinstance(response, RequestData):
                 app_logger.info('No response from endpoint %s: %s. %s', endpoint_id, endpoint_url, response)
