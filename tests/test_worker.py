@@ -339,8 +339,8 @@ class TestWorkers:
     @respx.mock
     def test_split_events_multiple_endpoints(self, db: Session, client: TestClient, celery_session_worker):
         """Multiple endpoints each get a separate request per event."""
-        ep1 = create_endpoint_from_dft_data(tc_id=1)[0]
-        ep2 = create_endpoint_from_dft_data(tc_id=2)[0]
+        ep1 = create_endpoint_from_dft_data(tc_id=1, webhook_url='https://endpoint-one.com')[0]
+        ep2 = create_endpoint_from_dft_data(tc_id=2, webhook_url='https://endpoint-two.com')[0]
         db.add(ep1)
         db.add(ep2)
         db.commit()
