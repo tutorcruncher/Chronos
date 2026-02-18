@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import gc
 import hashlib
 import hmac
@@ -99,9 +100,11 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     total_success, total_failed = 0, 0
     # Temporary fix for the issue with the number of connections caused by a certain client
     limits = httpx.Limits(max_connections=250)
+    loaded_payload = json.loads(payload)
 
     async with AsyncClient(limits=limits) as client:
         tasks = []
+        task_endpoints = []
         for endpoint in endpoints:
             # Check if the webhook URL is valid
             if not endpoint.webhook_url.startswith(acceptable_url_schemes):
@@ -111,27 +114,39 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                     endpoint.id,
                 )
                 continue
-            # Create sig for the endpoint
-            webhook_sig = hmac.new(endpoint.api_key.encode(), payload.encode(), hashlib.sha256)
-            sig_hex = webhook_sig.hexdigest()
-
             url = endpoint.webhook_url
             if url_extension:
                 url += f'/{url_extension}'
-            # Send the Webhook to the endpoint
 
-            loaded_payload = json.loads(payload)
-            task = asyncio.ensure_future(
-                webhook_request(client, url, endpoint.id, webhook_sig=sig_hex, data=loaded_payload)
-            )
-            tasks.append(task)
+            events = loaded_payload.get('events')
+            if events is not None:
+                payloads_to_send = []
+                for event in events:
+                    # for batched events requests from TC2 we want to split each action event
+                    # into their individual requests to the downstream endpoint. This is done for reverse compability
+                    # with zapier and other client integration
+                    single_event_payload = copy.deepcopy({k: v for k, v in loaded_payload.items() if k != 'events'})
+                    single_event_payload['events'] = [copy.deepcopy(event)]
+                    payloads_to_send.append(single_event_payload)
+            else:
+                payloads_to_send = [copy.deepcopy(loaded_payload)]
+            for payload_to_send in payloads_to_send:
+                send_json = json.dumps(payload_to_send)
+                sig = hmac.new(endpoint.api_key.encode(), send_json.encode(), hashlib.sha256)
+                task = asyncio.ensure_future(
+                    webhook_request(client, url, endpoint.id, webhook_sig=sig.hexdigest(), data=payload_to_send)
+                )
+                tasks.append(task)
+                task_endpoints.append((endpoint.id, url))
         webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
-        for response in webhook_responses:
+        # webhook responses and tasks endpoints are in task creation order.
+        # zip gives the matching endpoint id url for each result, including exceptions.
+        for response, (endpoint_id, endpoint_url) in zip(webhook_responses, task_endpoints):
             if not isinstance(response, RequestData):
-                app_logger.info('No response from endpoint %s: %s. %s', endpoint.id, endpoint.webhook_url, response)
+                app_logger.info('No response from endpoint %s: %s. %s', endpoint_id, endpoint_url, response)
                 continue
             elif not response.successful_response:
-                app_logger.info('No response from endpoint %s: %s', endpoint.id, endpoint.webhook_url)
+                app_logger.info('No response from endpoint %s: %s', response.endpoint_id, endpoint_url)
 
             if response.status_code in {200, 201, 202, 204}:
                 status = 'Success'

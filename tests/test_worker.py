@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -14,6 +16,7 @@ from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
     create_webhook_log_from_dft_data,
+    get_dft_con_webhook_data,
     get_dft_webhook_data,
     get_failed_response,
     get_successful_response,
@@ -281,6 +284,143 @@ class TestWorkers:
         assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[9][0][0]
         assert mock_request.call_count == 3
         assert len(webhooks) == 3
+
+    @respx.mock
+    def test_split_events_multiple(self, db: Session, client: TestClient, celery_session_worker):
+        """An endpoint with 3 events produces 3 webhook logs (one per event)."""
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        payload['events'] = [
+            {'branch': 99, 'event': 'test_event_1', 'data': {'test': 'data1'}},
+            {'branch': 99, 'event': 'test_event_2', 'data': {'test': 'data2'}},
+            {'branch': 99, 'event': 'test_event_3', 'data': {'test': 'data3'}},
+        ]
+        headers = _get_webhook_headers()
+        mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload))
+
+        assert mock_request.call_count == 3
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 3
+        for webhook in webhooks:
+            assert webhook.status == 'Success'
+            assert webhook.status_code == 200
+
+    @respx.mock
+    def test_split_events_single_event_per_request_body(self, db: Session, client: TestClient, celery_session_worker):
+        """Each request body contains exactly one event with other payload fields preserved."""
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        payload['events'] = [
+            {'branch': 99, 'event': 'test_event_1', 'data': {'test': 'data1'}},
+            {'branch': 99, 'event': 'test_event_2', 'data': {'test': 'data2'}},
+        ]
+        headers = _get_webhook_headers()
+        respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload))
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 2
+
+        request_bodies = [json.loads(wh.request_body) for wh in webhooks]
+        event_names = sorted([rb['events'][0]['event'] for rb in request_bodies])
+        assert event_names == ['test_event_1', 'test_event_2']
+        for rb in request_bodies:
+            assert len(rb['events']) == 1
+            assert rb['request_time'] == 1234567890
+
+    @respx.mock
+    def test_split_events_multiple_endpoints(self, db: Session, client: TestClient, celery_session_worker):
+        """Multiple endpoints each get a separate request per event."""
+        ep1 = create_endpoint_from_dft_data(tc_id=1, webhook_url='https://endpoint-one.com')[0]
+        ep2 = create_endpoint_from_dft_data(tc_id=2, webhook_url='https://endpoint-two.com')[0]
+        db.add(ep1)
+        db.add(ep2)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        payload['events'] = [
+            {'branch': 99, 'event': 'test_event_1', 'data': {'test': 'data1'}},
+            {'branch': 99, 'event': 'test_event_2', 'data': {'test': 'data2'}},
+            {'branch': 99, 'event': 'test_event_3', 'data': {'test': 'data3'}},
+        ]
+        headers = _get_webhook_headers()
+        mock_ep1 = respx.post(ep1.webhook_url).mock(return_value=get_successful_response(payload, headers))
+        mock_ep2 = respx.post(ep2.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload))
+
+        assert mock_ep1.call_count == 3
+        assert mock_ep2.call_count == 3
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 6
+
+        for ep in [ep1, ep2]:
+            ep_logs = db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
+            assert len(ep_logs) == 3
+            for log in ep_logs:
+                body = json.loads(log.request_body)
+                assert len(body['events']) == 1
+
+    @respx.mock
+    def test_split_events_signature_per_event(self, db: Session, client: TestClient, celery_session_worker):
+        """HMAC signature is computed on each individual split payload, not the original."""
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        payload['events'] = [
+            {'branch': 99, 'event': 'test_event_1', 'data': {'test': 'data1'}},
+            {'branch': 99, 'event': 'test_event_2', 'data': {'test': 'data2'}},
+        ]
+        headers = _get_webhook_headers()
+        mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload))
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 2
+        assert mock_request.call_count == 2
+
+        for call in mock_request.calls:
+            request_content = call.request.content
+            actual_sig = call.request.headers['webhook-signature']
+            expected_sig = hmac.new(ep.api_key.encode(), request_content, hashlib.sha256).hexdigest()
+            assert actual_sig == expected_sig
+            body = json.loads(request_content.decode())
+            assert len(body['events']) == 1
+
+    @respx.mock
+    def test_payload_without_events_sent_once(self, db: Session, client: TestClient, celery_session_worker):
+        """Payloads without events are forwarded once per endpoint and retain top-level fields."""
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_con_webhook_data()
+        headers = _get_webhook_headers()
+        mock_request = respx.post(f'{ep.webhook_url}/test').mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload), url_extension='test')
+
+        assert mock_request.call_count == 1
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 1
+
+        request_body = json.loads(webhooks[0].request_body)
+        assert 'events' not in request_body
+        assert request_body['branch_id'] == payload['branch_id']
+        assert request_body['request_time'] == payload['request_time']
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()
