@@ -77,7 +77,6 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
 
 
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
-ZAPIER_WEBHOOK_DOMAIN = 'hooks.zapier.com'
 
 
 def get_qlength():
@@ -117,22 +116,13 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                 url += f'/{url_extension}'
 
             loaded_payload = json.loads(payload)
-
-            if ZAPIER_WEBHOOK_DOMAIN in endpoint.webhook_url and loaded_payload.get('events'):
-                # Zapier triggers fire per-event, so split the events array into individual requests
-                for event in loaded_payload['events']:
-                    single_event_payload = {k: v for k, v in loaded_payload.items() if k != 'events'}
-                    single_event_payload['events'] = [event]
-                    single_event_json = json.dumps(single_event_payload)
-                    sig = hmac.new(endpoint.api_key.encode(), single_event_json.encode(), hashlib.sha256)
-                    task = asyncio.ensure_future(
-                        webhook_request(client, url, endpoint.id, webhook_sig=sig.hexdigest(), data=single_event_payload)
-                    )
-                    tasks.append(task)
-            else:
-                webhook_sig = hmac.new(endpoint.api_key.encode(), payload.encode(), hashlib.sha256)
+            for event in loaded_payload['events']:
+                single_event_payload = {k: v for k, v in loaded_payload.items() if k != 'events'}
+                single_event_payload['events'] = [event]
+                single_event_json = json.dumps(single_event_payload)
+                sig = hmac.new(endpoint.api_key.encode(), single_event_json.encode(), hashlib.sha256)
                 task = asyncio.ensure_future(
-                    webhook_request(client, url, endpoint.id, webhook_sig=webhook_sig.hexdigest(), data=loaded_payload)
+                    webhook_request(client, url, endpoint.id, webhook_sig=sig.hexdigest(), data=single_event_payload)
                 )
                 tasks.append(task)
         webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
