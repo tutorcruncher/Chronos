@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -281,6 +283,124 @@ class TestWorkers:
         assert 'HTTP error sending webhook to' in mock_logger.info.call_args_list[9][0][0]
         assert mock_request.call_count == 3
         assert len(webhooks) == 3
+
+    @respx.mock
+    def test_zapier_endpoint_splits_events(self, db: Session, client: TestClient, celery_session_worker):
+        """A Zapier endpoint with 3 events produces 3 webhook logs."""
+        ep = create_endpoint_from_dft_data(webhook_url='https://hooks.zapier.com/hooks/catch/123/abc')[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        payload['events'] = [
+            {'branch': 99, 'event': 'test_event_1', 'data': {'test': 'data1'}},
+            {'branch': 99, 'event': 'test_event_2', 'data': {'test': 'data2'}},
+            {'branch': 99, 'event': 'test_event_3', 'data': {'test': 'data3'}},
+        ]
+        headers = _get_webhook_headers()
+        mock_request = respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload))
+
+        assert mock_request.call_count == 3
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 3
+        for webhook in webhooks:
+            assert webhook.status == 'Success'
+            assert webhook.status_code == 200
+
+    @respx.mock
+    def test_zapier_single_event_per_request_body(self, db: Session, client: TestClient, celery_session_worker):
+        """Each Zapier request body contains exactly one event with other payload fields preserved."""
+        ep = create_endpoint_from_dft_data(webhook_url='https://hooks.zapier.com/hooks/catch/123/abc')[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        payload['events'] = [
+            {'branch': 99, 'event': 'test_event_1', 'data': {'test': 'data1'}},
+            {'branch': 99, 'event': 'test_event_2', 'data': {'test': 'data2'}},
+        ]
+        headers = _get_webhook_headers()
+        respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload))
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 2
+
+        request_bodies = [json.loads(wh.request_body) for wh in webhooks]
+        event_names = sorted([rb['events'][0]['event'] for rb in request_bodies])
+        assert event_names == ['test_event_1', 'test_event_2']
+        for rb in request_bodies:
+            assert len(rb['events']) == 1
+            assert rb['request_time'] == 1234567890
+
+    @respx.mock
+    def test_zapier_and_non_zapier_mixed_endpoints(self, db: Session, client: TestClient, celery_session_worker):
+        """Zapier endpoints get split events; non-Zapier endpoints get the full payload."""
+        zapier_ep = create_endpoint_from_dft_data(tc_id=1, webhook_url='https://hooks.zapier.com/hooks/catch/123/abc')[
+            0
+        ]
+        normal_ep = create_endpoint_from_dft_data(tc_id=2, webhook_url='https://normal-endpoint.com')[0]
+        db.add(zapier_ep)
+        db.add(normal_ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        payload['events'] = [
+            {'branch': 99, 'event': 'test_event_1', 'data': {'test': 'data1'}},
+            {'branch': 99, 'event': 'test_event_2', 'data': {'test': 'data2'}},
+            {'branch': 99, 'event': 'test_event_3', 'data': {'test': 'data3'}},
+        ]
+        headers = _get_webhook_headers()
+        zapier_mock = respx.post(zapier_ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+        normal_mock = respx.post(normal_ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload))
+
+        assert zapier_mock.call_count == 3
+        assert normal_mock.call_count == 1
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 4
+
+        zapier_logs = db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == zapier_ep.id)).all()
+        assert len(zapier_logs) == 3
+        for log in zapier_logs:
+            body = json.loads(log.request_body)
+            assert len(body['events']) == 1
+
+        normal_logs = db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == normal_ep.id)).all()
+        assert len(normal_logs) == 1
+        body = json.loads(normal_logs[0].request_body)
+        assert len(body['events']) == 3
+
+    @respx.mock
+    def test_zapier_signature_per_split_event(self, db: Session, client: TestClient, celery_session_worker):
+        """HMAC signature is computed on each individual split payload, not the original."""
+        ep = create_endpoint_from_dft_data(webhook_url='https://hooks.zapier.com/hooks/catch/123/abc')[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        payload['events'] = [
+            {'branch': 99, 'event': 'test_event_1', 'data': {'test': 'data1'}},
+            {'branch': 99, 'event': 'test_event_2', 'data': {'test': 'data2'}},
+        ]
+        headers = _get_webhook_headers()
+        respx.post(ep.webhook_url).mock(return_value=get_successful_response(payload, headers))
+
+        task_send_webhooks(json.dumps(payload))
+
+        webhooks = db.exec(select(WebhookLog)).all()
+        assert len(webhooks) == 2
+
+        for webhook in webhooks:
+            request_headers = json.loads(webhook.request_headers)
+            actual_sig = request_headers['webhook-signature']
+            expected_sig = hmac.new(ep.api_key.encode(), webhook.request_body.encode(), hashlib.sha256).hexdigest()
+            assert actual_sig == expected_sig
 
     def test_delete_old_logs(self, db: Session, client: TestClient, celery_session_worker):
         eps = create_endpoint_from_dft_data()

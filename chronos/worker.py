@@ -77,6 +77,7 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
 
 
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
+ZAPIER_WEBHOOK_DOMAIN = 'hooks.zapier.com'
 
 
 def get_qlength():
@@ -111,20 +112,26 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                     endpoint.id,
                 )
                 continue
-            # Create sig for the endpoint
-            webhook_sig = hmac.new(endpoint.api_key.encode(), payload.encode(), hashlib.sha256)
-            sig_hex = webhook_sig.hexdigest()
-
             url = endpoint.webhook_url
             if url_extension:
                 url += f'/{url_extension}'
-            # Send the Webhook to the endpoint
 
             loaded_payload = json.loads(payload)
-            task = asyncio.ensure_future(
-                webhook_request(client, url, endpoint.id, webhook_sig=sig_hex, data=loaded_payload)
-            )
-            tasks.append(task)
+
+            # Zapier triggers fire per-event, so split the events array into individual payloads
+            if ZAPIER_WEBHOOK_DOMAIN in endpoint.webhook_url and loaded_payload.get('events'):
+                base_payload = {k: v for k, v in loaded_payload.items() if k != 'events'}
+                payloads_to_send = [{**base_payload, 'events': [event]} for event in loaded_payload['events']]
+            else:
+                payloads_to_send = [loaded_payload]
+
+            for send_payload in payloads_to_send:
+                send_json = json.dumps(send_payload)
+                sig = hmac.new(endpoint.api_key.encode(), send_json.encode(), hashlib.sha256)
+                task = asyncio.ensure_future(
+                    webhook_request(client, url, endpoint.id, webhook_sig=sig.hexdigest(), data=send_payload)
+                )
+                tasks.append(task)
         webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
         for response in webhook_responses:
             if not isinstance(response, RequestData):
