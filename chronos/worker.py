@@ -4,6 +4,7 @@ import gc
 import hashlib
 import hmac
 import json
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -21,6 +22,7 @@ from sqlmodel import Session, select
 from chronos.db import engine
 from chronos.pydantic_schema import RequestData
 from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.tasks.queue import job_queue
 from chronos.utils import app_logger, settings
 
 cronjob = APIRouter()
@@ -276,3 +278,66 @@ def _delete_old_logs_job():
             gc.collect()
 
     cache.delete(DELETE_JOBS_KEY)
+
+
+@celery_app.task(name='job_dispatcher', acks_late=False)
+def job_dispatcher_task(
+    max_celery_queue: int = 50,
+    cycle_delay: float = 0.01,
+    idle_delay: float = 1.0,
+) -> None:
+    """Celery task that runs the continuous round-robin dispatcher.
+
+    Runs indefinitely, dispatching jobs from per-branch queues to Celery workers.
+    Implements backpressure by pausing when the Celery queue is full.
+
+    CRITICAL: acks_late=False overrides the global task_acks_late=True.
+    The dispatcher runs forever and never completes. With acks_late=True,
+    the Redis broker's visibility_timeout (default 1 hour) would redeliver
+    the unacked task, spawning a DUPLICATE dispatcher. Setting acks_late=False
+    acks the task immediately on receipt, preventing redelivery.
+    """
+    from billiard.exceptions import SoftTimeLimitExceeded
+    from chronos.tasks.dispatcher import dispatch_cycle
+
+    app_logger.info('Job dispatcher started')
+    while True:
+        try:
+            if not job_queue.has_active_jobs():
+                time.sleep(idle_delay)
+                continue
+
+            # LLEN celery: measures pending broker queue only, not in-flight tasks.
+            # Acceptable overshoot bounded by batch_limit. See Edge Case 26.
+            celery_queue_len = job_queue.get_celery_queue_length()
+            if celery_queue_len >= max_celery_queue:
+                time.sleep(cycle_delay)
+                continue
+
+            with logfire.span('Dispatching jobs') as span:
+                dispatched = dispatch_cycle()
+                if dispatched > 0:
+                    span.message = f'Dispatched {dispatched} jobs'
+                    app_logger.debug('Dispatched %d jobs', dispatched)
+
+            time.sleep(cycle_delay)
+        except SoftTimeLimitExceeded:
+            # Safety net: if CLI flags (--soft-time-limit=0) aren't set properly,
+            # catch the exception and continue rather than dying.
+            app_logger.warning('Dispatcher caught SoftTimeLimitExceeded, continuing')
+            continue
+        except Exception:
+            # CRITICAL: Catch all other exceptions to prevent the dispatcher from
+            # dying permanently. dispatch_cycle() or job_queue methods can raise
+            # redis.ConnectionError, serialization errors, broker hiccups, etc.
+            # The worker_ready signal only fires on worker process start, NOT on
+            # task failure — so an uncaught exception here kills the dispatcher
+            # with no automatic recovery until the worker process itself restarts.
+            app_logger.exception('Dispatcher error, sleeping %s seconds before retry', idle_delay)
+            time.sleep(idle_delay)
+            continue
+
+
+# Import worker_startup to register the signal handler.
+# Must be at the bottom of the file because worker_startup imports from this module.
+import chronos.tasks.worker_startup  # noqa: F401, E402
