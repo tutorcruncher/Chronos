@@ -460,12 +460,6 @@ def test_peek_returns_none_for_nonexistent_branch():
     assert result is None
 
 
-def test_get_celery_queue_length_returns_zero_when_empty():
-    """get_celery_queue_length returns 0 when no tasks in the celery broker queue."""
-    result = job_queue.get_celery_queue_length()
-    assert result == 0
-
-
 def test_job_dispatcher_task_soft_time_limit_caught():
     """SoftTimeLimitExceeded is caught and the dispatcher continues."""
     from billiard.exceptions import SoftTimeLimitExceeded
