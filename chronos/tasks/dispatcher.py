@@ -120,6 +120,6 @@ def dispatch_cycle(batch_limit: int = DEFAULT_BATCH_LIMIT):
         except Exception:
             dispatch_logger.exception('Failed to update cursor after dispatching for branch %d', branch_id)
         dispatched += 1
-        dispatch_logger.debug('Dispatched %s for branch %d', payload.task_name, branch_id)
+        dispatch_logger.info('Dispatched %s for branch %d', payload.task_name, branch_id)
 
     return dispatched

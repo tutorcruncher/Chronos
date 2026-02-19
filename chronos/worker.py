@@ -363,7 +363,7 @@ def job_dispatcher_task(
                     # without this gaurd the cycle will log every 10ms it finds nothing
                     # in the dispatcher queue which can be noisy
                     span.message = f'Dispatched {dispatched} jobs'
-                    app_logger.debug('Dispatched %d jobs', dispatched)
+                    app_logger.info('Dispatched %d jobs', dispatched)
 
             time.sleep(cycle_delay)
         except SoftTimeLimitExceeded:
