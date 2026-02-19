@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # Round-robin dispatcher feature flag
     # So the dispatcher mode can be turned off gradually if we want to
     # switch back to the previous mode of handling tasks
-    use_round_robin: bool = False
+    use_round_robin: bool = True
 
     # Read local env file for local variables
     model_config = SettingsConfigDict(env_file='.env', extra='allow')
