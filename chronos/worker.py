@@ -107,21 +107,6 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
 
 
-# def get_qlength():
-#     """
-#     Get the length of the queue from celery. Celery returns a dictionary like so: {'queue_name': [task1, task2, ...]}
-#     so to get qlength we simply aggregate the length of all task lists
-#     """
-#     qlength = 0
-#     celery_inspector = celery_app.control.inspect()
-#     dict_of_queues = celery_inspector.reserved()
-#     if dict_of_queues and isinstance(dict_of_queues, dict):
-#         for k, v in dict_of_queues.items():
-#             qlength += len(v)
-#
-#     return qlength
-
-
 async def _async_post_webhooks(endpoints, url_extension, payload):
     webhook_logs = []
     total_success, total_failed = 0, 0
