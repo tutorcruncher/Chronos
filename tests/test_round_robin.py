@@ -187,26 +187,40 @@ def test_job_dispatcher_task_backpressure_and_idle():
     """Backpressure skips dispatch_cycle; idle path sleeps at idle_delay."""
     from chronos.worker import job_dispatcher_task
 
+    sleep_calls = []
+
+    def backpressure_sleep(s):
+        sleep_calls.append(s)
+        if len(sleep_calls) >= 2:
+            raise SystemExit
+
     with (
         patch.object(job_queue, 'has_active_jobs', return_value=True),
         patch.object(job_queue, 'get_celery_queue_length', return_value=100),
-        patch('time.sleep', side_effect=SystemExit) as mock_sleep,
+        patch('time.sleep', side_effect=backpressure_sleep),
         patch('chronos.tasks.dispatcher.dispatch_cycle') as mock_dispatch,
     ):
         with pytest.raises(SystemExit):
             job_dispatcher_task()
         mock_dispatch.assert_not_called()
-        mock_sleep.assert_called_with(0.01)
+        assert sleep_calls[0] == 0.01
+
+    sleep_calls.clear()
+
+    def idle_sleep(s):
+        sleep_calls.append(s)
+        if len(sleep_calls) >= 2:
+            raise SystemExit
 
     with (
         patch.object(job_queue, 'has_active_jobs', return_value=False),
-        patch('time.sleep', side_effect=SystemExit) as mock_sleep,
+        patch('time.sleep', side_effect=idle_sleep),
         patch('chronos.tasks.dispatcher.dispatch_cycle') as mock_dispatch,
     ):
         with pytest.raises(SystemExit):
             job_dispatcher_task()
         mock_dispatch.assert_not_called()
-        mock_sleep.assert_called_with(1.0)
+        assert sleep_calls[0] == 1.0
 
 
 def test_job_dispatcher_task_catches_generic_exception_and_keeps_running():
@@ -412,3 +426,124 @@ def test_round_robin_end_to_end_interleaving_two_branches(mock_apply, session: S
 def test_queue_singleton_wiring_in_worker():
     """job_queue in worker.py uses the same Redis client as cache."""
     assert job_queue.redis_client is cache
+
+
+def test_dispatch_cycle_no_active_branches():
+    """dispatch_cycle returns 0 when no branches have pending jobs."""
+    assert not job_queue.has_active_jobs()
+    dispatched = dispatch_cycle()
+    assert dispatched == 0
+
+
+def test_dispatch_cycle_peek_returns_none_for_empty_branch():
+    """A branch in the active set but with an empty LIST is skipped via peek returning None."""
+    cache.sadd(ACTIVE_BRANCHES_KEY, '999')
+
+    dispatched = dispatch_cycle()
+    assert dispatched == 0
+
+
+def test_dispatch_cycle_poison_payload_ack_failure():
+    """When ack itself fails on a poison payload, the dispatcher continues without crashing."""
+    cache.rpush(BRANCH_KEY_TEMPLATE.format(77), 'not valid json{{{')
+    cache.sadd(ACTIVE_BRANCHES_KEY, '77')
+
+    with patch.object(job_queue, 'ack', side_effect=RuntimeError('redis down')):
+        dispatched = dispatch_cycle()
+
+    assert dispatched == 0
+
+
+def test_peek_returns_none_for_nonexistent_branch():
+    """peek() returns None for a branch with no queue."""
+    result = job_queue.peek(999999)
+    assert result is None
+
+
+def test_get_celery_queue_length_returns_zero_when_empty():
+    """get_celery_queue_length returns 0 when no tasks in the celery broker queue."""
+    result = job_queue.get_celery_queue_length()
+    assert result == 0
+
+
+def test_job_dispatcher_task_soft_time_limit_caught():
+    """SoftTimeLimitExceeded is caught and the dispatcher continues."""
+    from billiard.exceptions import SoftTimeLimitExceeded
+
+    from chronos.worker import job_dispatcher_task
+
+    call_count = 0
+
+    def has_active_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise SoftTimeLimitExceeded()
+        raise SystemExit
+
+    with (
+        patch.object(job_queue, 'has_active_jobs', side_effect=has_active_side_effect),
+        patch('time.sleep'),
+    ):
+        with pytest.raises(SystemExit):
+            job_dispatcher_task()
+
+    assert call_count == 2
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_job_dispatcher_task_dispatches_and_logs(mock_apply):
+    """The dispatcher runs dispatch_cycle and logs when dispatched > 0."""
+    from chronos.worker import job_dispatcher_task
+
+    job_queue.enqueue(task_send_webhooks.name, branch_id=42, payload='p')
+
+    call_count = 0
+
+    def sleep_side_effect(seconds):
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 2:
+            raise SystemExit
+
+    with (
+        patch('time.sleep', side_effect=sleep_side_effect),
+        patch('chronos.worker.logfire') as mock_logfire,
+    ):
+        mock_span = MagicMock()
+        mock_logfire.span.return_value.__enter__ = MagicMock(return_value=mock_span)
+        mock_logfire.span.return_value.__exit__ = MagicMock(return_value=False)
+        with pytest.raises(SystemExit):
+            job_dispatcher_task()
+
+    mock_apply.assert_called_once()
+    assert mock_span.message == 'Dispatched 1 jobs'
+
+
+def test_job_dispatcher_task_dispatch_cycle_returns_zero():
+    """When dispatch_cycle returns 0, the dispatcher does not set span.message."""
+    from chronos.worker import job_dispatcher_task
+
+    call_count = 0
+
+    def sleep_side_effect(seconds):
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 2:
+            raise SystemExit
+
+    with (
+        patch.object(job_queue, 'has_active_jobs', return_value=True),
+        patch.object(job_queue, 'get_celery_queue_length', return_value=0),
+        patch('chronos.tasks.dispatcher.dispatch_cycle', return_value=0),
+        patch('time.sleep', side_effect=sleep_side_effect),
+        patch('chronos.worker.logfire') as mock_logfire,
+    ):
+        mock_span = MagicMock(spec=['message'])
+        del mock_span.message
+        mock_logfire.span.return_value.__enter__ = MagicMock(return_value=mock_span)
+        mock_logfire.span.return_value.__exit__ = MagicMock(return_value=False)
+        with pytest.raises(SystemExit):
+            job_dispatcher_task()
+
+    assert not hasattr(mock_span, 'message')
