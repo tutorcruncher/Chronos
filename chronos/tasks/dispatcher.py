@@ -25,15 +25,12 @@ from bisect import bisect_right
 
 from pydantic import ValidationError
 
+from chronos.utils import settings
+
 dispatch_logger = logging.getLogger('chronos.dispatcher')
 
-DEFAULT_BATCH_LIMIT = 100  # TODO think over this limit
-DEFAULT_MAX_CELERY_QUEUE = 50
-DEFAULT_CYCLE_DELAY = 0.01
-DEFAULT_IDLE_DELAY = 1.0
 
-
-def dispatch_cycle(batch_limit: int = DEFAULT_BATCH_LIMIT):
+def dispatch_cycle(batch_limit: int = settings.dispatcher_batch_limit):
     """
     Execute one round-robin dispatch cycle.
 

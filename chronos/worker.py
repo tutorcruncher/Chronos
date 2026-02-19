@@ -50,7 +50,6 @@ celery_app.conf.update(
 )
 
 GLOBAL_BRANCH_ID = 0
-MAX_CELERY_QUEUE = 100  # TODO: Needs to be taken from settings with a default of 100
 
 cache = Redis.from_url(settings.redis_url)
 
@@ -89,7 +88,7 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
     with logfire.span('{method=} {url!r}', url=url, method='POST'):
         r = None
         try:
-            r = await client.post(url=url, json=data, headers=headers, timeout=8)
+            r = await client.post(url=url, json=data, headers=headers, timeout=settings.webhook_http_timeout_seconds)
         except httpx.TimeoutException as terr:
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
         except httpx.HTTPError as httperr:
@@ -127,7 +126,7 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     webhook_logs = []
     total_success, total_failed = 0, 0
     # Temporary fix for the issue with the number of connections caused by a certain client
-    limits = httpx.Limits(max_connections=250)
+    limits = httpx.Limits(max_connections=settings.webhook_http_max_connections)
     loaded_payload = json.loads(payload)
 
     async with AsyncClient(limits=limits) as client:
@@ -219,7 +218,7 @@ def task_send_webhooks(
         branch_id = loaded_payload['branch_id']
 
     qlength = job_queue.get_celery_queue_length()
-    if qlength > 100:
+    if qlength > settings.dispatcher_max_celery_queue:
         app_logger.error('Queue is too long, qlength=%s. Check workers and speeds.', qlength)
 
     app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
@@ -322,9 +321,9 @@ def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
 
 @celery_app.task(name='job_dispatcher', acks_late=False)
 def job_dispatcher_task(
-    max_celery_queue: int = MAX_CELERY_QUEUE,
-    cycle_delay: float = 0.01,  # at most the webhooks need to wait for 10ms
-    idle_delay: float = 1.0,  # this is for when no active branches, so doesn't need to be as frequent
+    max_celery_queue: int = settings.dispatcher_max_celery_queue,
+    cycle_delay: float = settings.dispatcher_cycle_delay_seconds,  # at most the webhooks need to wait for 10ms
+    idle_delay: float = settings.dispatcher_idle_delay_seconds,  # this is for when no active branches, so doesn't need to be as frequent
 ) -> None:
     """
     Celery task that runs round robin dispatcher.

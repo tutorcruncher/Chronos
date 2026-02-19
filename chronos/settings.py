@@ -34,5 +34,17 @@ class Settings(BaseSettings):
     # switch back to the previous mode of handling tasks
     use_round_robin: bool = True
 
+    # Round-robin dispatcher tuning
+
+    dispatcher_max_celery_queue: int = 100
+    dispatcher_batch_limit: int = 100
+    dispatcher_cycle_delay_seconds: float = 0.01
+    dispatcher_idle_delay_seconds: float = 1.0
+
+    # Webhook HTTP client tuning
+
+    webhook_http_timeout_seconds: float = 8.0
+    webhook_http_max_connections: int = 250
+
     # Read local env file for local variables
     model_config = SettingsConfigDict(env_file='.env', extra='allow')
