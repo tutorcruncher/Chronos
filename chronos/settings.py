@@ -36,9 +36,13 @@ class Settings(BaseSettings):
 
     # Round-robin dispatcher tuning
 
+    # Backpressure threshold. If the broker queue (`celery`) has 100 or more pending tasks, dispatcher pauses dispatching temporarily.
     dispatcher_max_celery_queue: int = 100
+    # Maximum number of jobs dispatched in one round-robin cycle (default cycle runs every 10 ms)
     dispatcher_batch_limit: int = 100
+    # Sleep duration between normal dispatcher cycles while there is work.
     dispatcher_cycle_delay_seconds: float = 0.01
+    # Sleep duration when no active branches have queued jobs.
     dispatcher_idle_delay_seconds: float = 1.0
 
     # Webhook HTTP client tuning
