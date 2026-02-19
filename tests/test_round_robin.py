@@ -43,11 +43,28 @@ def test_send_webhooks_round_robin_disabled_uses_direct_delay(
     assert not job_queue.has_active_jobs()
 
 
-def test_extract_branch_id_from_events_payload():
-    payload = {'events': [{'branch': 123, 'action': 'test'}]}
-    assert _extract_branch_id(payload) == 123
-    payload = {'branch_id': 456, 'id': 1}
-    assert _extract_branch_id(payload) == 456
+def test_extract_branch_id():
+    assert _extract_branch_id({'events': [{'branch': 123, 'action': 'test'}]}) == 123
+    assert _extract_branch_id({'branch_id': 456, 'id': 1}) == 456
+    assert _extract_branch_id({'events': [{'action': 'test'}]}) == 0
+    assert _extract_branch_id({'id': 1}) == 0
+
+
+def test_extract_branch_id_rejects_invalid_values():
+    from fastapi import HTTPException
+
+    for bad_payload in [
+        {'events': [{'branch': 'not_a_number'}]},
+        {'events': [{'branch': True}]},
+        {'branch_id': 'abc'},
+        {'branch_id': False},
+        {'events': [{'branch': [1, 2]}]},
+    ]:
+        with pytest.raises(HTTPException) as exc_info:
+            _extract_branch_id(bad_payload)
+        assert exc_info.value.status_code == 422
+
+    assert not job_queue.has_active_jobs()
 
 
 def test_dispatch_branch_task_enqueues_with_task_name_and_kwargs():
@@ -61,41 +78,29 @@ def test_dispatch_branch_task_enqueues_with_task_name_and_kwargs():
     assert peeked.branch_id == 42
 
 
-def test_queue_enqueue_writes_list_and_active_set():
-    job_queue.enqueue('test_task', branch_id=77, payload='data')
-
-    assert 77 in job_queue.get_active_branches()
-    assert job_queue.get_queue_length(77) == 1
-
-    peeked = job_queue.peek(77)
-    assert peeked.task_name == 'test_task'
-    assert peeked.kwargs == {'payload': 'data'}
-
-
-def test_queue_ack_single_item_removes_active_branch():
-    job_queue.enqueue('test_task', branch_id=88, payload='data')
+def test_queue_enqueue_and_ack():
+    """enqueue writes list + active set, ack removes correctly based on remaining items."""
+    job_queue.enqueue('test_task', branch_id=88, payload='first')
+    job_queue.enqueue('test_task', branch_id=88, payload='second')
     assert 88 in job_queue.get_active_branches()
+    assert job_queue.get_queue_length(88) == 2
+
+    peeked = job_queue.peek(88)
+    assert peeked.task_name == 'test_task'
+    assert peeked.kwargs == {'payload': 'first'}
+
+    job_queue.ack(88)
+    assert 88 in job_queue.get_active_branches()
+    assert job_queue.get_queue_length(88) == 1
+    assert job_queue.peek(88).kwargs == {'payload': 'second'}
+
     job_queue.ack(88)
     assert 88 not in job_queue.get_active_branches()
     assert job_queue.get_queue_length(88) == 0
 
 
-def test_queue_ack_multiple_items_keeps_branch_active():
-    job_queue.enqueue('test_task', branch_id=88, payload='first')
-    job_queue.enqueue('test_task', branch_id=88, payload='second')
-    assert job_queue.get_queue_length(88) == 2
-
-    job_queue.ack(88)
-    assert 88 in job_queue.get_active_branches()
-    assert job_queue.get_queue_length(88) == 1
-
-    peeked = job_queue.peek(88)
-    assert peeked.kwargs == {'payload': 'second'}
-
-
 def test_queue_ack_noscript_error_reloads_lua_and_retries():
     job_queue.enqueue('test_task', branch_id=55, payload='data')
-
     JobQueue._ack_script_sha = 'deadbeef_invalid_sha'
 
     job_queue.ack(55)
@@ -103,10 +108,6 @@ def test_queue_ack_noscript_error_reloads_lua_and_retries():
     assert job_queue.get_queue_length(55) == 0
     assert 55 not in job_queue.get_active_branches()
     assert JobQueue._ack_script_sha != 'deadbeef_invalid_sha'
-
-
-def test_dispatch_cycle_no_active_branches_returns_zero():
-    assert dispatch_cycle() == 0
 
 
 @patch.object(task_send_webhooks, 'apply_async')
@@ -124,20 +125,15 @@ def test_dispatch_cycle_cursor_rotation_with_stale_cursor(mock_apply):
     assert job_queue.get_queue_length(5) == 1
 
 
-def test_dispatch_cycle_unknown_task_is_acked_and_skipped():
-    """Jobs with unknown task names are acked and skipped."""
+def test_dispatch_cycle_bad_jobs_are_acked():
+    """Unknown tasks and poison payloads are acked and skipped."""
     job_queue.enqueue('nonexistent_task_xyz', branch_id=42, payload='data')
-
     dispatched = dispatch_cycle()
     assert dispatched == 0
     assert not job_queue.has_active_jobs()
 
-
-def test_dispatch_cycle_poison_payload_is_acked():
-    """Invalid JSON payloads are acked to prevent infinite retries."""
-    cache.rpush(BRANCH_KEY_TEMPLATE.format(42), 'not valid json{{{')
-    cache.sadd(ACTIVE_BRANCHES_KEY, '42')
-
+    cache.rpush(BRANCH_KEY_TEMPLATE.format(43), 'not valid json{{{')
+    cache.sadd(ACTIVE_BRANCHES_KEY, '43')
     dispatched = dispatch_cycle()
     assert dispatched == 0
     assert not job_queue.has_active_jobs()
@@ -167,11 +163,8 @@ def test_dispatch_cycle_cursor_update_failure_does_not_fail_dispatch(mock_apply)
     assert not job_queue.has_active_jobs()
 
 
-# --- Tests 17-19: job_dispatcher_task loop behaviour ---
-
-
-def test_job_dispatcher_task_backpressure_skips_dispatch_cycle():
-    """When the Celery queue is full, the dispatcher skips dispatch_cycle."""
+def test_job_dispatcher_task_backpressure_and_idle():
+    """Backpressure skips dispatch_cycle; idle path sleeps at idle_delay."""
     from chronos.worker import job_dispatcher_task
 
     with (
@@ -185,26 +178,15 @@ def test_job_dispatcher_task_backpressure_skips_dispatch_cycle():
         mock_dispatch.assert_not_called()
         mock_sleep.assert_called_with(0.01)
 
-
-def test_job_dispatcher_task_idle_path():
-    """When no active jobs, the dispatcher sleeps at idle_delay."""
-    from chronos.worker import job_dispatcher_task
-
-    sleep_calls = []
-
-    def sleep_side_effect(seconds):
-        sleep_calls.append(seconds)
-        raise SystemExit
-
     with (
         patch.object(job_queue, 'has_active_jobs', return_value=False),
-        patch('time.sleep', side_effect=sleep_side_effect),
+        patch('time.sleep', side_effect=SystemExit) as mock_sleep,
         patch('chronos.tasks.dispatcher.dispatch_cycle') as mock_dispatch,
     ):
         with pytest.raises(SystemExit):
             job_dispatcher_task()
-        assert sleep_calls == [1.0]
         mock_dispatch.assert_not_called()
+        mock_sleep.assert_called_with(1.0)
 
 
 def test_job_dispatcher_task_catches_generic_exception_and_keeps_running():
@@ -222,14 +204,11 @@ def test_job_dispatcher_task_catches_generic_exception_and_keeps_running():
 
     sleep_calls = []
 
-    def sleep_side_effect(seconds):
-        sleep_calls.append(seconds)
-
     with (
         patch.object(job_queue, 'has_active_jobs', return_value=True),
         patch.object(job_queue, 'get_celery_queue_length', return_value=0),
         patch('chronos.tasks.dispatcher.dispatch_cycle', side_effect=dispatch_side_effect),
-        patch('time.sleep', side_effect=sleep_side_effect),
+        patch('time.sleep', side_effect=lambda s: sleep_calls.append(s)),
     ):
         with pytest.raises(SystemExit):
             job_dispatcher_task()
@@ -238,11 +217,7 @@ def test_job_dispatcher_task_catches_generic_exception_and_keeps_running():
     assert 1.0 in sleep_calls
 
 
-# --- Test 20: Worker startup signal ---
-
-
 def test_worker_ready_starts_dispatcher_only_on_dispatcher_queue():
-    """start_dispatcher_on_worker_ready only starts dispatcher on dispatcher queue workers."""
     from chronos.tasks.worker_startup import start_dispatcher_on_worker_ready
 
     mock_queue = MagicMock()

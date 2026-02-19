@@ -52,9 +52,6 @@ celery_app.conf.update(
 GLOBAL_BRANCH_ID = 0
 MAX_CELERY_QUEUE = 100  # TODO: Needs to be taken from settings with a default of 100
 
-if settings.testing:
-    celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
-
 cache = Redis.from_url(settings.redis_url)
 
 # Initialize job queue with the same Redis client

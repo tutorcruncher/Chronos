@@ -33,11 +33,26 @@ def _extract_branch_id(webhook_payload: dict) -> int:
     Handles both webhook formats:
     - TCWebhook:               {'events': [{'branch': 123, ...}], ...}
     - TCPublicProfileWebhook:  {'branch_id': 123, ...}
+
+    Raises HTTPException 422 if the branch value is present but not a valid integer.
     """
     events = webhook_payload.get('events')
     if events:
-        return events[0].get('branch', GLOBAL_BRANCH_ID)
-    return webhook_payload.get('branch_id', GLOBAL_BRANCH_ID)
+        value = events[0].get('branch')
+    else:
+        value = webhook_payload.get('branch_id')
+
+    if value is None:
+        return GLOBAL_BRANCH_ID
+
+    if isinstance(value, bool):
+        # because int type casting is compatible with bool
+        raise HTTPException(status_code=422, detail=f'Invalid branch_id: {value!r}')
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f'Invalid branch_id: {value!r}')
 
 
 def send_webhooks(
