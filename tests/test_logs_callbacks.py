@@ -1,12 +1,12 @@
 import json
 from datetime import datetime, timedelta
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from chronos.main import app
 from chronos.sql_models import WebhookLog
+from chronos.tasks.dispatcher import dispatch_cycle
 from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
@@ -23,33 +23,48 @@ def test_send_webhooks(session: Session, client: TestClient):
     payload = get_dft_webhook_data()
     headers = _get_webhook_headers()
 
-    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
-        r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
-        assert mock_task.called
+    r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
     assert r.status_code == 200
     assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
+
+    from chronos.worker import job_queue
+
+    assert job_queue.has_active_jobs()
+    dispatched = dispatch_cycle()
+    assert dispatched == 1
+    assert not job_queue.has_active_jobs()
 
 
 def test_send_webhooks__request_time(session: Session, client: TestClient):
     payload = get_dft_con_webhook_data(_request_time=1234567890, request_time=None)
     headers = _get_webhook_headers()
 
-    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
-        r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
-        assert mock_task.called
+    r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
     assert r.status_code == 200
     assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
+
+    from chronos.worker import job_queue
+
+    assert job_queue.has_active_jobs()
+    dispatched = dispatch_cycle()
+    assert dispatched == 1
+    assert not job_queue.has_active_jobs()
 
 
 def test_send_webhooks_con_endpoint(session: Session, client: TestClient):
     payload = get_dft_con_webhook_data()
     headers = _get_webhook_headers()
 
-    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
-        r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
-        assert mock_task.called
+    r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
     assert r.status_code == 200
     assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
+
+    from chronos.worker import job_queue
+
+    assert job_queue.has_active_jobs()
+    dispatched = dispatch_cycle()
+    assert dispatched == 1
+    assert not job_queue.has_active_jobs()
 
 
 def test_send_webhooks_con_endpoint_deleted_user(session: Session, client: TestClient):
@@ -74,22 +89,29 @@ def test_send_webhooks_con_endpoint_deleted_user(session: Session, client: TestC
     payload = get_dft_con_webhook_data(**set_deleted_kwargs)
     headers = _get_webhook_headers()
 
-    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
-        r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
-        assert mock_task.called
+    r = client.post(send_webhook_with_extension_url, data=json.dumps(payload), headers=headers)
     assert r.status_code == 200
     assert r.json()['message'] == 'Sending webhooks to endpoints has been successfully initiated.'
+
+    from chronos.worker import job_queue
+
+    assert job_queue.has_active_jobs()
+    dispatched = dispatch_cycle()
+    assert dispatched == 1
+    assert not job_queue.has_active_jobs()
 
 
 def test_send_webhook_bad_request(session: Session, client: TestClient):
     payload = get_dft_webhook_data(request_time='I am a string')
     headers = _get_webhook_headers()
 
-    with patch('chronos.worker.task_send_webhooks.delay') as mock_task:
-        r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
-        assert not mock_task.called
+    r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
     assert r.status_code == 422
     assert r.json()['detail'][0]['msg'] == 'Input should be a valid integer, unable to parse string as an integer'
+
+    from chronos.worker import job_queue
+
+    assert not job_queue.has_active_jobs()
 
 
 def test_get_logs_none(session: Session, client: TestClient):

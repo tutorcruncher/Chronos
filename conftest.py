@@ -46,6 +46,14 @@ def client_fixture(session: Session):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def clear_job_queue():
+    from chronos.worker import job_queue
+
+    yield
+    job_queue.clear_all()
+
+
 @pytest.fixture(scope='session')
 def celery_config():
     return {'broker_url': 'redis://', 'result_backend': 'redis://'}

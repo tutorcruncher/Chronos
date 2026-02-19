@@ -27,7 +27,7 @@ from pydantic import ValidationError
 
 dispatch_logger = logging.getLogger('chronos.dispatcher')
 
-DEFAULT_BATCH_LIMIT = 100
+DEFAULT_BATCH_LIMIT = 100  # TODO think over this limit
 DEFAULT_MAX_CELERY_QUEUE = 50
 DEFAULT_CYCLE_DELAY = 0.01
 DEFAULT_IDLE_DELAY = 1.0
@@ -69,6 +69,8 @@ def dispatch_cycle(batch_limit: int = DEFAULT_BATCH_LIMIT):
     branches_to_process = active_branches[start_index:] + active_branches[:start_index]
     for branch_id in branches_to_process:
         if dispatched >= batch_limit:
+            # we will continue from here again in the next cycle if we have dispatched past
+            # the per cycle dispatch limit
             break
 
         # Phase 1 is peek and validate poison payloads are acked or discarded.

@@ -48,7 +48,7 @@ class JobQueue:
         """
         return BRANCH_KEY_TEMPLATE.format(branch_id)
 
-    def enqueue(self, task_name: str, routing_branch_id: int, **kwargs):
+    def enqueue(self, task_name: str, branch_id: int, **kwargs):
         """Add a job to a branch's queue.
 
         Args:
@@ -58,16 +58,16 @@ class JobQueue:
         """
         payload = JobPayload(
             task_name=task_name,
-            branch_id=routing_branch_id,
+            branch_id=branch_id,
             kwargs=kwargs,
             enqueued_at=datetime.now(UTC),
         )
-        queue_key = self._get_queue_key(routing_branch_id)
+        queue_key = self._get_queue_key(branch_id)
 
         # we create a pipeline to execute the enqueue related commands
         pipeline = self.redis_client.pipeline()
         pipeline.rpush(queue_key, payload.model_dump_json())
-        pipeline.sadd(ACTIVE_BRANCHES_KEY, str(routing_branch_id))
+        pipeline.sadd(ACTIVE_BRANCHES_KEY, str(branch_id))
         pipeline.execute()
 
     def peek(self, branch_id: int) -> JobPayload | None:
@@ -120,6 +120,7 @@ class JobQueue:
         return sorted(int(bid) for bid in branch_ids)
 
     def has_active_jobs(self) -> bool:
+        # checks against the cardinality or length of the set
         return self.redis_client.scard(ACTIVE_BRANCHES_KEY) > 0
 
     def get_cursor(self) -> Optional[int]:

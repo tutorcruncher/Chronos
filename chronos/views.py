@@ -54,9 +54,12 @@ def send_webhooks(
     # Start job to send webhooks to endpoints on the workers
     if settings.use_round_robin:
         branch_id = _extract_branch_id(webhook_payload)
+        # we wouldn't want to import the job_queue singleton in view code
+        # so we use a wrapper around the job_queue.enqueue(...) that lives in
+        # the worker file
         dispatch_branch_task(
             task_send_webhooks,
-            routing_branch_id=branch_id,
+            branch_id=branch_id,
             payload=json.dumps(webhook_payload),
             url_extension=url_extension,
         )

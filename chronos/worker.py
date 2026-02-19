@@ -49,6 +49,9 @@ celery_app.conf.update(
     },
 )
 
+GLOBAL_BRANCH_ID = 0
+MAX_CELERY_QUEUE = 100  # TODO: Needs to be taken from settings with a default of 100
+
 if settings.testing:
     celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
 
@@ -313,29 +316,26 @@ def _delete_old_logs_job():
 GLOBAL_BRANCH_ID = 0
 
 
-def dispatch_branch_task(task, routing_branch_id: int, **kwargs) -> None:
-    """Dispatch a task to per-branch Redis queue for round-robin processing.
-
-    In eager mode (testing), tasks are executed synchronously bypassing Redis.
+def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
     """
-    if celery_app.conf.task_always_eager:
-        task.apply_async(kwargs=kwargs)
-    else:
-        job_queue.enqueue(task.name, routing_branch_id=routing_branch_id, **kwargs)
+    Dispatches a task to per branch queue for fair round robin processing.
+    """
+    job_queue.enqueue(task.name, branch_id=branch_id, **kwargs)
 
 
 @celery_app.task(name='job_dispatcher', acks_late=False)
 def job_dispatcher_task(
-    max_celery_queue: int = 50,
-    cycle_delay: float = 0.01,
-    idle_delay: float = 1.0,
+    max_celery_queue: int = MAX_CELERY_QUEUE,
+    cycle_delay: float = 0.01,  # at most the webhooks need to wait for 10ms
+    idle_delay: float = 1.0,  # this is for when no active branches, so doesn't need to be as frequent
 ) -> None:
-    """Celery task that runs the continuous round-robin dispatcher.
+    """
+    Celery task that runs round robin dispatcher.
 
     Runs indefinitely, dispatching jobs from per-branch queues to Celery workers.
     Implements backpressure by pausing when the Celery queue is full.
 
-    CRITICAL: acks_late=False overrides the global task_acks_late=True.
+    CRITICAL NOTE: acks_late=False overrides the global task_acks_late=True.
     The dispatcher runs forever and never completes. With acks_late=True,
     the Redis broker's visibility_timeout (default 1 hour) would redeliver
     the unacked task, spawning a DUPLICATE dispatcher. Setting acks_late=False
@@ -353,26 +353,30 @@ def job_dispatcher_task(
                 continue
 
             # LLEN celery: measures pending broker queue only, not in-flight tasks.
-            # Acceptable overshoot bounded by batch_limit. See Edge Case 26.
             celery_queue_len = job_queue.get_celery_queue_length()
             if celery_queue_len >= max_celery_queue:
+                # We wait for then regular celery workers to process the present tasks first before
+                # running the dispatch cycle again
                 time.sleep(cycle_delay)
                 continue
 
             with logfire.span('Dispatching jobs') as span:
                 dispatched = dispatch_cycle()
                 if dispatched > 0:
+                    # without this gaurd the cycle will log every 10ms it finds nothing
+                    # in the dispatcher queue which can be noisy
                     span.message = f'Dispatched {dispatched} jobs'
                     app_logger.debug('Dispatched %d jobs', dispatched)
 
             time.sleep(cycle_delay)
         except SoftTimeLimitExceeded:
-            # Safety net: if CLI flags (--soft-time-limit=0) aren't set properly,
+            # Safety net for when if CLI flags (--soft-time-limit=0) aren't ever set properly,
             # catch the exception and continue rather than dying.
             app_logger.warning('Dispatcher caught SoftTimeLimitExceeded, continuing')
+            # since this is meant to run indefinitely
             continue
         except Exception:
-            # CRITICAL: Catch all other exceptions to prevent the dispatcher from
+            # CRITICAL NOTE: Catch all other exceptions to prevent the dispatcher from
             # dying permanently. dispatch_cycle() or job_queue methods can raise
             # redis.ConnectionError, serialization errors, broker hiccups, etc.
             # The worker_ready signal only fires on worker process start, NOT on

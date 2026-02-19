@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     tc2_shared_key: str = 'test-key'
 
     # Round-robin dispatcher feature flag
+    # So the dispatcher mode can be turned off gradually if we want to
+    # switch back to the previous mode of handling tasks
     use_round_robin: bool = False
 
     # Read local env file for local variables
