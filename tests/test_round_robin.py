@@ -1,17 +1,37 @@
 """Tests for the round-robin dispatch infrastructure."""
 
+import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import redis.exceptions
+import respx
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+from chronos.sql_models import WebhookEndpoint
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
 from chronos.views import _extract_branch_id
-from chronos.worker import cache, dispatch_branch_task, job_queue, task_send_webhooks
+from chronos.worker import _async_post_webhooks, cache, dispatch_branch_task, job_queue, task_send_webhooks
 from tests.test_helpers import _get_webhook_headers, get_dft_webhook_data, send_webhook_url
+
+REALISTIC_TC2_EVENTS = [
+    {
+        'branch': 3,
+        'action': 'REMOVED_A_LABEL_FROM_A_SERVICE',
+        'topic': 'SERVICES',
+        'data': {'id': 1001, 'label': 'Premium'},
+    },
+    {
+        'branch': 3,
+        'action': 'ADDED_A_LABEL_TO_A_SERVICE',
+        'topic': 'SERVICES',
+        'data': {'id': 1002, 'label': 'Standard'},
+    },
+]
 
 
 def test_send_webhooks_round_robin_enabled_uses_dispatch_branch_task(session: Session, client: TestClient):
@@ -237,3 +257,158 @@ def test_worker_ready_starts_dispatcher_only_on_dispatcher_queue():
     with patch('chronos.worker.job_dispatcher_task') as mock_task:
         start_dispatcher_on_worker_ready(sender=mock_sender_regular)
         mock_task.delay.assert_not_called()
+
+
+def test_task_send_webhooks_missing_request_time_behavior(session: Session, client: TestClient):
+    """API rejects missing request_time; task raises KeyError if it bypasses validation."""
+    headers = _get_webhook_headers()
+    payload_no_request_time = {'events': REALISTIC_TC2_EVENTS}
+
+    r = client.post(send_webhook_url, data=json.dumps(payload_no_request_time), headers=headers)
+    assert r.status_code == 422
+
+    with pytest.raises(KeyError, match='request_time'):
+        task_send_webhooks(json.dumps(payload_no_request_time))
+
+
+def test_task_send_webhooks_autoretry_config_is_set():
+    """Assert autoretry_for, retry_backoff, and max_retries are configured on the task."""
+    assert task_send_webhooks.autoretry_for == (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
+    assert task_send_webhooks.retry_backoff is True
+    assert task_send_webhooks.retry_kwargs == {'max_retries': 3}
+
+
+def test_async_post_webhooks_empty_events_list():
+    """events=[] produces zero outgoing requests even with active endpoints."""
+    endpoint = WebhookEndpoint(
+        id=1,
+        tc_id=1,
+        name='test-endpoint',
+        branch_id=3,
+        webhook_url='https://example.com/hook',
+        api_key='secret',
+        active=True,
+    )
+    payload = json.dumps({'events': [], 'request_time': 1771509452})
+
+    logs, success, failed = asyncio.run(_async_post_webhooks([endpoint], None, payload))
+
+    assert logs == []
+    assert success == 0
+    assert failed == 0
+
+
+def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
+    """Invalid URL schemes are skipped; valid endpoints process all events."""
+    valid_endpoint = WebhookEndpoint(
+        id=1,
+        tc_id=1,
+        name='valid-hook',
+        branch_id=3,
+        webhook_url='https://valid.example.com/hook',
+        api_key='key1',
+        active=True,
+    )
+    invalid_endpoint = WebhookEndpoint(
+        id=2,
+        tc_id=2,
+        name='invalid-hook',
+        branch_id=3,
+        webhook_url='foobar://not-a-real-url',
+        api_key='key2',
+        active=True,
+    )
+    payload = json.dumps(
+        {
+            'events': REALISTIC_TC2_EVENTS,
+            'request_time': 1771509452,
+        }
+    )
+
+    with respx.mock:
+        respx.post('https://valid.example.com/hook').mock(return_value=httpx.Response(200))
+        logs, success, failed = asyncio.run(_async_post_webhooks([valid_endpoint, invalid_endpoint], None, payload))
+
+    assert len(logs) == 2
+    assert success == 2
+    assert failed == 0
+    assert all(log.webhook_endpoint_id == 1 for log in logs)
+
+
+def test_async_post_webhooks_response_exception_does_not_break_other_tasks():
+    """An exception from one endpoint doesn't prevent logging of successful ones."""
+    failing = WebhookEndpoint(
+        id=1,
+        tc_id=1,
+        name='failing-hook',
+        branch_id=3,
+        webhook_url='https://failing.example.com/hook',
+        api_key='key1',
+        active=True,
+    )
+    healthy = WebhookEndpoint(
+        id=2,
+        tc_id=2,
+        name='healthy-hook',
+        branch_id=3,
+        webhook_url='https://healthy.example.com/hook',
+        api_key='key2',
+        active=True,
+    )
+    payload = json.dumps(
+        {
+            'events': [REALISTIC_TC2_EVENTS[0]],
+            'request_time': 1771509452,
+        }
+    )
+
+    with respx.mock:
+        respx.post('https://failing.example.com/hook').mock(side_effect=RuntimeError('connection exploded'))
+        respx.post('https://healthy.example.com/hook').mock(return_value=httpx.Response(200))
+        logs, success, failed = asyncio.run(_async_post_webhooks([failing, healthy], None, payload))
+
+    assert len(logs) == 1
+    assert success == 1
+    assert failed == 0
+    assert logs[0].webhook_endpoint_id == 2
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_round_robin_end_to_end_interleaving_two_branches(mock_apply, session: Session, client: TestClient):
+    """Two branches enqueued via API are dispatched fairly: one from each per cycle."""
+    headers = _get_webhook_headers()
+
+    payload_branch_3 = {
+        'events': [
+            {'branch': 3, 'action': 'REMOVED_A_LABEL_FROM_A_SERVICE', 'topic': 'SERVICES', 'data': {'id': 1001}}
+        ],
+        'request_time': 1771509452,
+    }
+    payload_branch_7 = {
+        'events': [{'branch': 7, 'action': 'ADDED_A_LABEL_TO_A_SERVICE', 'topic': 'SERVICES', 'data': {'id': 2001}}],
+        'request_time': 1771509452,
+    }
+
+    for _ in range(2):
+        r = client.post(send_webhook_url, data=json.dumps(payload_branch_3), headers=headers)
+        assert r.status_code == 200
+    r = client.post(send_webhook_url, data=json.dumps(payload_branch_7), headers=headers)
+    assert r.status_code == 200
+
+    assert job_queue.get_queue_length(3) == 2
+    assert job_queue.get_queue_length(7) == 1
+
+    dispatched = dispatch_cycle(batch_limit=2)
+    assert dispatched == 2
+    assert job_queue.get_queue_length(3) == 1
+    assert job_queue.get_queue_length(7) == 0
+
+    dispatched = dispatch_cycle(batch_limit=2)
+    assert dispatched == 1
+    assert not job_queue.has_active_jobs()
+    assert mock_apply.call_count == 3
+
+
+def test_queue_singleton_wiring_in_worker():
+    """job_queue in worker.py uses the same Redis client as cache."""
+    assert job_queue.redis_client is cache
