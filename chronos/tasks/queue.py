@@ -13,9 +13,9 @@ CURSOR_KEY = 'jobs:dispatcher:cursor'
 
 
 class JobPayload(BaseModel):
-    '''
+    """
     This is used to serialise the Job Payload stored in Redis
-    '''
+    """
 
     task_name: str
     branch_id: int
@@ -24,9 +24,9 @@ class JobPayload(BaseModel):
 
 
 class JobQueue:
-    '''
+    """
     Redis LIST queue for per branch Job storage
-    '''
+    """
 
     # this is a Lua script for atomic pop and remove
     _ACK_SCRIPT = """
@@ -43,24 +43,31 @@ class JobQueue:
         self.redis_client = redis_client
 
     def _get_queue_key(self, branch_id: int) -> str:
-        '''
+        """
         gives the key for the queue using the branch id
-        '''
+        """
         return BRANCH_KEY_TEMPLATE.format(branch_id)
 
-    def enqueue(self, task_name: str, branch_id: int, **kwargs):
+    def enqueue(self, task_name: str, routing_branch_id: int, **kwargs):
+        """Add a job to a branch's queue.
+
+        Args:
+            task_name: Name of the Celery task to execute.
+            routing_branch_id: Branch ID for queue routing (not passed to the task).
+            **kwargs: Arguments to pass to the task.
+        """
         payload = JobPayload(
             task_name=task_name,
-            branch_id=branch_id,
+            branch_id=routing_branch_id,
             kwargs=kwargs,
             enqueued_at=datetime.now(UTC),
         )
-        queue_key = self._get_queue_key(branch_id)
+        queue_key = self._get_queue_key(routing_branch_id)
 
         # we create a pipeline to execute the enqueue related commands
         pipeline = self.redis_client.pipeline()
         pipeline.rpush(queue_key, payload.model_dump_json())
-        pipeline.sadd(ACTIVE_BRANCHES_KEY, str(branch_id))
+        pipeline.sadd(ACTIVE_BRANCHES_KEY, str(routing_branch_id))
         pipeline.execute()
 
     def peek(self, branch_id: int) -> JobPayload | None:
@@ -74,9 +81,9 @@ class JobQueue:
         return JobPayload(**json.loads(data))
 
     def _run_ack_script(self, queue_key: str, branch_id: int) -> None:
-        '''
+        """
         Runs the atomic Lua ack script
-        '''
+        """
         try:
             self.redis_client.evalsha(
                 JobQueue._ack_script_sha,
@@ -124,14 +131,19 @@ class JobQueue:
 
     def get_queue_length(self, branch_id: int) -> int:
         """
-        Get pending tasks in the Celery default queue. O(1) Redis operation.
+        Get the length of a branch's queue. O(1) Redis operation.
+        """
+        return self.redis_client.llen(self._get_queue_key(branch_id))
+
+    def get_celery_queue_length(self) -> int:
+        """Get pending tasks in the Celery default queue. O(1) Redis operation.
 
         IMPORTANT: This measures only the broker queue (tasks waiting to be picked
         up by a worker). It does NOT count tasks currently being executed by workers.
         With 2 workers busy and LLEN=0, real system load is 2, not 0. See Edge Case 26
         for analysis of why this is acceptable and Appendix B for future improvements.
         """
-        return self.redis_client.llen(self._get_queue_key(branch_id))
+        return self.redis_client.llen('celery')
 
     def clear_all(self) -> None:
         """
@@ -145,7 +157,3 @@ class JobQueue:
         pipe.delete(ACTIVE_BRANCHES_KEY)
         pipe.delete(CURSOR_KEY)
         pipe.execute()
-
-
-# singleton  ( add the redis queue obj )
-job_queue = JobQueue()

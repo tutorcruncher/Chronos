@@ -15,12 +15,21 @@ services:
 
   worker:
     build: chronos
-    command: celery -A worker.celery worker --loglevel=info
+    command: celery -A worker worker --loglevel=info --concurrency 2 -E
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
       - web
+      - redis
+
+  dispatcher:
+    build: chronos
+    command: celery -A worker worker -Q dispatcher -c 1 --without-heartbeat --without-mingle --soft-time-limit=0 --time-limit=0
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
       - redis
 
   redis:

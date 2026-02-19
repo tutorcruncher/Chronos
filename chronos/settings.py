@@ -29,5 +29,8 @@ class Settings(BaseSettings):
     dft_timezone: str = 'Europe/London'
     tc2_shared_key: str = 'test-key'
 
+    # Round-robin dispatcher feature flag
+    use_round_robin: bool = False
+
     # Read local env file for local variables
     model_config = SettingsConfigDict(env_file='.env', extra='allow')

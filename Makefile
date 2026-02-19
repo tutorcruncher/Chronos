@@ -49,3 +49,7 @@ run-server:
 .PHONY: run-worker
 run-worker:
 	celery -A chronos.worker worker --loglevel=info --autoscale 4,2 -E
+
+.PHONY: run-dispatcher
+run-dispatcher:
+	celery -A chronos.worker worker -Q dispatcher -c 1 --without-heartbeat --without-mingle --soft-time-limit=0 --time-limit=0

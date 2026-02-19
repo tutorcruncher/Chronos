@@ -18,14 +18,12 @@ celery -A chronos.worker worker -Q dispatcher -c 1 \
     --without-heartbeat --without-mingle \
     --soft-time-limit=0 --time-limit=0
 """
+
 import json
 import logging
-import time
 from bisect import bisect_right
 
 from pydantic import ValidationError
-
-from chronos.tasks.queue import job_queue
 
 dispatch_logger = logging.getLogger('chronos.dispatcher')
 
@@ -48,7 +46,7 @@ def dispatch_cycle(batch_limit: int = DEFAULT_BATCH_LIMIT):
     branch after 7 in sorted order), not 5.
     """
     # avoids circular import here
-    from chronos.worker import celery_app
+    from chronos.worker import celery_app, job_queue
 
     # get all the active branches here
     active_branches = job_queue.get_active_branches()
@@ -106,7 +104,9 @@ def dispatch_cycle(batch_limit: int = DEFAULT_BATCH_LIMIT):
         try:
             task.apply_async(kwargs=payload.kwargs)
         except Exception:
-            dispatch_logger.exception('Failed to dispatch %s for branch %d, will retry next cycle', payload.task_name, branch_id)
+            dispatch_logger.exception(
+                'Failed to dispatch %s for branch %d, will retry next cycle', payload.task_name, branch_id
+            )
             # so the concept is that the transient error will hopefully resolve next cycle
             # don't really think we'll get a serialisation error here? Because they should be discarded in phase 1
             continue
@@ -120,6 +120,4 @@ def dispatch_cycle(batch_limit: int = DEFAULT_BATCH_LIMIT):
         dispatched += 1
         dispatch_logger.debug('Dispatched %s for branch %d', payload.task_name, branch_id)
 
-
     return dispatched
-

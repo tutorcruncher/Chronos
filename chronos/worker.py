@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import logfire
+import redis.exceptions
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from celery.app import Celery
 from celery.signals import worker_process_init
@@ -22,14 +23,39 @@ from sqlmodel import Session, select
 from chronos.db import engine
 from chronos.pydantic_schema import RequestData
 from chronos.sql_models import WebhookEndpoint, WebhookLog
-from chronos.tasks.queue import job_queue
+from chronos.tasks.queue import JobQueue
 from chronos.utils import app_logger, settings
 
 cronjob = APIRouter()
 
 celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_url)
-celery_app.conf.broker_connection_retry_on_startup = True
+celery_app.conf.update(
+    broker_connection_retry_on_startup=True,
+    # Serialization
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    # Reliability: ack after completion, requeue on crash
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    # Worker tuning: fetch one task at a time for fair scheduling
+    worker_prefetch_multiplier=1,
+    # Task execution limits
+    task_soft_time_limit=300,
+    task_time_limit=600,
+    # Route dispatcher to its own queue
+    task_routes={
+        'job_dispatcher': {'queue': 'dispatcher'},
+    },
+)
+
+if settings.testing:
+    celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
+
 cache = Redis.from_url(settings.redis_url)
+
+# Initialize job queue with the same Redis client
+job_queue = JobQueue(redis_client=cache)
 
 
 @worker_process_init.connect
@@ -82,19 +108,19 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
 
 
-def get_qlength():
-    """
-    Get the length of the queue from celery. Celery returns a dictionary like so: {'queue_name': [task1, task2, ...]}
-    so to get qlength we simply aggregate the length of all task lists
-    """
-    qlength = 0
-    celery_inspector = celery_app.control.inspect()
-    dict_of_queues = celery_inspector.reserved()
-    if dict_of_queues and isinstance(dict_of_queues, dict):
-        for k, v in dict_of_queues.items():
-            qlength += len(v)
-
-    return qlength
+# def get_qlength():
+#     """
+#     Get the length of the queue from celery. Celery returns a dictionary like so: {'queue_name': [task1, task2, ...]}
+#     so to get qlength we simply aggregate the length of all task lists
+#     """
+#     qlength = 0
+#     celery_inspector = celery_app.control.inspect()
+#     dict_of_queues = celery_inspector.reserved()
+#     if dict_of_queues and isinstance(dict_of_queues, dict):
+#         for k, v in dict_of_queues.items():
+#             qlength += len(v)
+#
+#     return qlength
 
 
 async def _async_post_webhooks(endpoints, url_extension, payload):
@@ -172,7 +198,11 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     return webhook_logs, total_success, total_failed
 
 
-@celery_app.task
+@celery_app.task(
+    autoretry_for=(redis.exceptions.ConnectionError, redis.exceptions.TimeoutError),
+    retry_kwargs={'max_retries': 3},
+    retry_backoff=True,
+)
 def task_send_webhooks(
     payload: str,
     url_extension: str = None,
@@ -182,15 +212,15 @@ def task_send_webhooks(
     """
     loaded_payload = json.loads(payload)
     loaded_payload['_request_time'] = loaded_payload.pop('request_time')
-    qlength = get_qlength()
 
     if loaded_payload.get('events'):
         branch_id = loaded_payload['events'][0]['branch']
     else:
         branch_id = loaded_payload['branch_id']
 
+    qlength = job_queue.get_celery_queue_length()
     if qlength > 100:
-        app_logger.error('Queue is too long. Check workers and speeds.')
+        app_logger.error('Queue is too long, qlength=%s. Check workers and speeds.', qlength)
 
     app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
     lf_span = 'Sending webhooks for branch: {branch_id=}'
@@ -280,6 +310,20 @@ def _delete_old_logs_job():
     cache.delete(DELETE_JOBS_KEY)
 
 
+GLOBAL_BRANCH_ID = 0
+
+
+def dispatch_branch_task(task, routing_branch_id: int, **kwargs) -> None:
+    """Dispatch a task to per-branch Redis queue for round-robin processing.
+
+    In eager mode (testing), tasks are executed synchronously bypassing Redis.
+    """
+    if celery_app.conf.task_always_eager:
+        task.apply_async(kwargs=kwargs)
+    else:
+        job_queue.enqueue(task.name, routing_branch_id=routing_branch_id, **kwargs)
+
+
 @celery_app.task(name='job_dispatcher', acks_late=False)
 def job_dispatcher_task(
     max_celery_queue: int = 50,
@@ -298,6 +342,7 @@ def job_dispatcher_task(
     acks the task immediately on receipt, preventing redelivery.
     """
     from billiard.exceptions import SoftTimeLimitExceeded
+
     from chronos.tasks.dispatcher import dispatch_cycle
 
     app_logger.info('Job dispatcher started')

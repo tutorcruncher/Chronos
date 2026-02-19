@@ -11,6 +11,7 @@ from celery.signals import worker_ready
 
 logger = logging.getLogger('chronos.dispatcher')
 
+
 @worker_ready.connect
 def start_dispatcher_on_worker_ready(sender, **kwargs):
     queues = [q.name if hasattr(q, 'name') else q for q in sender.app.amqp.queues.consume_from]
@@ -19,4 +20,5 @@ def start_dispatcher_on_worker_ready(sender, **kwargs):
         # Local import to avoid circular dependency: worker_startup.py is imported
         # at the bottom of worker.py, so worker.py isn't fully loaded yet.
         from chronos.worker import job_dispatcher_task
+
         job_dispatcher_task.delay()

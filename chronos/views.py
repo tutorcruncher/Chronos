@@ -11,7 +11,7 @@ from chronos.db import get_session
 from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCPublicProfileWebhook, TCWebhook
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import settings
-from chronos.worker import task_send_webhooks
+from chronos.worker import GLOBAL_BRANCH_ID, dispatch_branch_task, task_send_webhooks
 
 main_router = APIRouter()
 security = HTTPBearer()
@@ -27,6 +27,19 @@ def check_authorisation(authorisation: HTTPAuthorizationCredentials):
         return True
 
 
+def _extract_branch_id(webhook_payload: dict) -> int:
+    """Extract branch_id from a webhook payload.
+
+    Handles both webhook formats:
+    - TCWebhook:               {'events': [{'branch': 123, ...}], ...}
+    - TCPublicProfileWebhook:  {'branch_id': 123, ...}
+    """
+    events = webhook_payload.get('events')
+    if events:
+        return events[0].get('branch', GLOBAL_BRANCH_ID)
+    return webhook_payload.get('branch_id', GLOBAL_BRANCH_ID)
+
+
 def send_webhooks(
     webhook: TCWebhook | TCPublicProfileWebhook,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
@@ -39,7 +52,16 @@ def send_webhooks(
     webhook_payload = webhook.model_dump()
 
     # Start job to send webhooks to endpoints on the workers
-    task_send_webhooks.delay(json.dumps(webhook_payload), url_extension)
+    if settings.use_round_robin:
+        branch_id = _extract_branch_id(webhook_payload)
+        dispatch_branch_task(
+            task_send_webhooks,
+            routing_branch_id=branch_id,
+            payload=json.dumps(webhook_payload),
+            url_extension=url_extension,
+        )
+    else:
+        task_send_webhooks.delay(json.dumps(webhook_payload), url_extension)
     return {'message': 'Sending webhooks to endpoints has been successfully initiated.'}
 
 
