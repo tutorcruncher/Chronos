@@ -4,11 +4,13 @@ import gc
 import hashlib
 import hmac
 import json
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import logfire
+import redis.exceptions
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from celery.app import Celery
 from celery.signals import worker_process_init
@@ -21,13 +23,38 @@ from sqlmodel import Session, select
 from chronos.db import engine
 from chronos.pydantic_schema import RequestData
 from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.tasks.queue import JobQueue
 from chronos.utils import app_logger, settings
 
 cronjob = APIRouter()
 
 celery_app = Celery(__name__, broker=settings.redis_url, backend=settings.redis_url)
-celery_app.conf.broker_connection_retry_on_startup = True
+celery_app.conf.update(
+    broker_connection_retry_on_startup=True,
+    # Serialization
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    # Reliability: ack after completion, requeue on crash
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    # Worker tuning: fetch one task at a time for fair scheduling
+    worker_prefetch_multiplier=1,
+    # Task execution limits
+    task_soft_time_limit=300,
+    task_time_limit=600,
+    # Route dispatcher to its own queue
+    task_routes={
+        'job_dispatcher': {'queue': 'dispatcher'},
+    },
+)
+
+GLOBAL_BRANCH_ID = 0
+
 cache = Redis.from_url(settings.redis_url)
+
+# Initialize job queue with the same Redis client
+job_queue = JobQueue(redis_client=cache)
 
 
 @worker_process_init.connect
@@ -61,7 +88,7 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
     with logfire.span('{method=} {url!r}', url=url, method='POST'):
         r = None
         try:
-            r = await client.post(url=url, json=data, headers=headers, timeout=8)
+            r = await client.post(url=url, json=data, headers=headers, timeout=settings.webhook_http_timeout_seconds)
         except httpx.TimeoutException as terr:
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
         except httpx.HTTPError as httperr:
@@ -80,26 +107,11 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
 
 
-def get_qlength():
-    """
-    Get the length of the queue from celery. Celery returns a dictionary like so: {'queue_name': [task1, task2, ...]}
-    so to get qlength we simply aggregate the length of all task lists
-    """
-    qlength = 0
-    celery_inspector = celery_app.control.inspect()
-    dict_of_queues = celery_inspector.reserved()
-    if dict_of_queues and isinstance(dict_of_queues, dict):
-        for k, v in dict_of_queues.items():
-            qlength += len(v)
-
-    return qlength
-
-
 async def _async_post_webhooks(endpoints, url_extension, payload):
     webhook_logs = []
     total_success, total_failed = 0, 0
     # Temporary fix for the issue with the number of connections caused by a certain client
-    limits = httpx.Limits(max_connections=250)
+    limits = httpx.Limits(max_connections=settings.webhook_http_max_connections)
     loaded_payload = json.loads(payload)
 
     async with AsyncClient(limits=limits) as client:
@@ -125,6 +137,11 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                     # for batched events requests from TC2 we want to split each action event
                     # into their individual requests to the downstream endpoint. This is done for reverse compability
                     # with zapier and other client integration
+
+                    # looks like for PR #120 we should keep this code as it is because on deployment, the task queue will still have
+                    # payloads of the old consolidated type which require to be split or there may be a bunch of Zapier errors.
+
+                    # TODO: remove the splitting logic here after Issue #119 fix is deployed
                     single_event_payload = copy.deepcopy({k: v for k, v in loaded_payload.items() if k != 'events'})
                     single_event_payload['events'] = [copy.deepcopy(event)]
                     payloads_to_send.append(single_event_payload)
@@ -170,7 +187,11 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     return webhook_logs, total_success, total_failed
 
 
-@celery_app.task
+@celery_app.task(
+    autoretry_for=(redis.exceptions.ConnectionError, redis.exceptions.TimeoutError),
+    retry_kwargs={'max_retries': 3},
+    retry_backoff=True,
+)
 def task_send_webhooks(
     payload: str,
     url_extension: str = None,
@@ -180,15 +201,15 @@ def task_send_webhooks(
     """
     loaded_payload = json.loads(payload)
     loaded_payload['_request_time'] = loaded_payload.pop('request_time')
-    qlength = get_qlength()
 
     if loaded_payload.get('events'):
         branch_id = loaded_payload['events'][0]['branch']
     else:
         branch_id = loaded_payload['branch_id']
 
-    if qlength > 100:
-        app_logger.error('Queue is too long. Check workers and speeds.')
+    qlength = job_queue.get_celery_queue_length()
+    if qlength > settings.dispatcher_max_celery_queue:
+        app_logger.error('Queue is too long, qlength=%s. Check workers and speeds.', qlength)
 
     app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
     lf_span = 'Sending webhooks for branch: {branch_id=}'
@@ -276,3 +297,100 @@ def _delete_old_logs_job():
             gc.collect()
 
     cache.delete(DELETE_JOBS_KEY)
+
+
+def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
+    """
+    Dispatches a task to per branch queue for fair round robin processing.
+
+    For poyloads with N events, split such that:
+    P({e1, e2, ..., eN}) -> [P({e1}), P({e2}), ..., P({eN})]
+    """
+    payload = kwargs.pop('payload', None)
+    url_extension = kwargs.pop('url_extension', None)
+    if not payload:
+        return
+
+    events = payload.get('events')
+    if not events:
+        # Non event payloads like TCPublicProfileWebhook enqueue as it is
+        job_queue.enqueue(task.name, branch_id=branch_id, payload=json.dumps(payload), url_extension=url_extension)
+        return
+
+    request_time = payload['request_time']
+    for event in events:
+        job_queue.enqueue(
+            task.name,
+            branch_id=branch_id,
+            payload=json.dumps({'events': [event], 'request_time': request_time}),
+            url_extension=url_extension,
+        )
+
+
+@celery_app.task(name='job_dispatcher', acks_late=False)
+def job_dispatcher_task(
+    max_celery_queue: int = settings.dispatcher_max_celery_queue,
+    cycle_delay: float = settings.dispatcher_cycle_delay_seconds,  # at most the webhooks need to wait for 10ms
+    idle_delay: float = settings.dispatcher_idle_delay_seconds,  # this is for when no active branches, so doesn't need to be as frequent
+) -> None:
+    """
+    Celery task that runs round robin dispatcher.
+
+    Runs indefinitely, dispatching jobs from per-branch queues to Celery workers.
+    Implements backpressure by pausing when the Celery queue is full.
+
+    CRITICAL NOTE: acks_late=False overrides the global task_acks_late=True.
+    The dispatcher runs forever and never completes. With acks_late=True,
+    the Redis broker's visibility_timeout (default 1 hour) would redeliver
+    the unacked task, spawning a DUPLICATE dispatcher. Setting acks_late=False
+    acks the task immediately on receipt, preventing redelivery.
+    """
+    from billiard.exceptions import SoftTimeLimitExceeded
+
+    from chronos.tasks.dispatcher import dispatch_cycle
+
+    app_logger.info('Job dispatcher started')
+    while True:
+        try:
+            if not job_queue.has_active_jobs():
+                time.sleep(idle_delay)
+                continue
+
+            # LLEN celery: measures pending broker queue only, not in-flight tasks.
+            celery_queue_len = job_queue.get_celery_queue_length()
+            if celery_queue_len >= max_celery_queue:
+                # We wait for then regular celery workers to process the present tasks first before
+                # running the dispatch cycle again
+                time.sleep(cycle_delay)
+                continue
+
+            with logfire.span('Dispatching jobs') as span:
+                dispatched = dispatch_cycle()
+                if dispatched > 0:
+                    # without this gaurd the cycle will log every 10ms it finds nothing
+                    # in the dispatcher queue which can be noisy
+                    span.message = f'Dispatched {dispatched} jobs'
+                    app_logger.info('Dispatched %d jobs', dispatched)
+
+            time.sleep(cycle_delay)
+        except SoftTimeLimitExceeded:
+            # Safety net for when if CLI flags (--soft-time-limit=0) aren't ever set properly,
+            # catch the exception and continue rather than dying.
+            app_logger.warning('Dispatcher caught SoftTimeLimitExceeded, continuing')
+            # since this is meant to run indefinitely
+            continue
+        except Exception:
+            # CRITICAL NOTE: Catch all other exceptions to prevent the dispatcher from
+            # dying permanently. dispatch_cycle() or job_queue methods can raise
+            # redis.ConnectionError, serialization errors, broker hiccups, etc.
+            # The worker_ready signal only fires on worker process start, NOT on
+            # task failure — so an uncaught exception here kills the dispatcher
+            # with no automatic recovery until the worker process itself restarts.
+            app_logger.exception('Dispatcher error, sleeping %s seconds before retry', idle_delay)
+            time.sleep(idle_delay)
+            continue
+
+
+# Import worker_startup to register the signal handler.
+# Must be at the bottom of the file because worker_startup imports from this module.
+import chronos.tasks.worker_startup  # noqa: F401, E402

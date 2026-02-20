@@ -11,7 +11,7 @@ from chronos.db import get_session
 from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCPublicProfileWebhook, TCWebhook
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import settings
-from chronos.worker import task_send_webhooks
+from chronos.worker import GLOBAL_BRANCH_ID, dispatch_branch_task, task_send_webhooks
 
 main_router = APIRouter()
 security = HTTPBearer()
@@ -27,6 +27,34 @@ def check_authorisation(authorisation: HTTPAuthorizationCredentials):
         return True
 
 
+def _extract_branch_id(webhook_payload: dict) -> int:
+    """Extract branch_id from a webhook payload.
+
+    Handles both webhook formats:
+    - TCWebhook:               {'events': [{'branch': 123, ...}], ...}
+    - TCPublicProfileWebhook:  {'branch_id': 123, ...}
+
+    Raises HTTPException 422 if the branch value is present but not a valid integer.
+    """
+    events = webhook_payload.get('events')
+    if events:
+        value = events[0].get('branch')
+    else:
+        value = webhook_payload.get('branch_id')
+
+    if value is None:
+        return GLOBAL_BRANCH_ID
+
+    if isinstance(value, bool):
+        # because int type casting is compatible with bool
+        raise HTTPException(status_code=422, detail=f'Invalid branch_id: {value!r}')
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f'Invalid branch_id: {value!r}')
+
+
 def send_webhooks(
     webhook: TCWebhook | TCPublicProfileWebhook,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
@@ -39,7 +67,19 @@ def send_webhooks(
     webhook_payload = webhook.model_dump()
 
     # Start job to send webhooks to endpoints on the workers
-    task_send_webhooks.delay(json.dumps(webhook_payload), url_extension)
+    if settings.use_round_robin:
+        branch_id = _extract_branch_id(webhook_payload)
+        # we wouldn't want to import the job_queue singleton in view code
+        # so we use a wrapper around the job_queue.enqueue(...) that lives in
+        # the worker file
+        dispatch_branch_task(
+            task_send_webhooks,
+            branch_id=branch_id,
+            payload=webhook_payload,
+            url_extension=url_extension,
+        )
+    else:
+        task_send_webhooks.delay(json.dumps(webhook_payload), url_extension)
     return {'message': 'Sending webhooks to endpoints has been successfully initiated.'}
 
 
