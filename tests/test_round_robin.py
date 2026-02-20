@@ -1,6 +1,8 @@
 """Tests for the round-robin dispatch infrastructure."""
 
 import asyncio
+import hashlib
+import hmac
 import json
 from unittest.mock import MagicMock, patch
 
@@ -9,14 +11,20 @@ import pytest
 import redis.exceptions
 import respx
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint
+from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
 from chronos.views import _extract_branch_id
 from chronos.worker import _async_post_webhooks, cache, dispatch_branch_task, job_queue, task_send_webhooks
-from tests.test_helpers import _get_webhook_headers, get_dft_webhook_data, send_webhook_url
+from tests.test_helpers import (
+    _get_webhook_headers,
+    get_dft_con_webhook_data,
+    get_dft_webhook_data,
+    send_webhook_url,
+    send_webhook_with_extension_url,
+)
 
 REALISTIC_TC2_EVENTS = [
     {
@@ -542,3 +550,257 @@ def test_job_dispatcher_task_dispatch_cycle_returns_zero():
             job_dispatcher_task()
 
     assert not hasattr(mock_span, 'message')
+
+
+@pytest.fixture
+def app_db(engine):
+    """Yield a session on the test engine so data is visible to task_send_webhooks.
+
+    Uses the conftest engine (test_pg_dsn) rather than chronos.db.engine to
+    guarantee tests never touch the production database.  On CI (testing=true)
+    both engines resolve to test_pg_dsn so the task's own session sees the
+    same data.
+    """
+    with Session(engine) as db:
+        yield db
+
+
+@respx.mock
+def test_e2e_tc2_multi_event_webhook_splits_and_delivers(session: Session, client: TestClient, app_db: Session):
+    """
+    A realistic TC2 webhook carrying 3 action events hits the API.
+
+    Expected behaviour after the ingress-splitting change:
+      1.  The view passes the raw dict to dispatch_branch_task.
+      2.  dispatch_branch_task splits the 3-event payload into 3 single-event
+          jobs and enqueues each into the per-branch Redis queue.
+      3.  dispatch_cycle picks them up and hands them to Celery.
+      4.  task_send_webhooks delivers each single-event payload to every
+          active endpoint for the branch, computing a fresh HMAC per request.
+      5.  One WebhookLog row is written per (event × endpoint) combination.
+    """
+    from sqlalchemy import delete as sa_delete
+
+    ep1 = WebhookEndpoint(
+        tc_id=501,
+        name='alpha-hook',
+        branch_id=99,
+        webhook_url='https://alpha.example.com/hook',
+        api_key='alpha_secret',
+        active=True,
+    )
+    ep2 = WebhookEndpoint(
+        tc_id=502,
+        name='beta-hook',
+        branch_id=99,
+        webhook_url='https://beta.example.com/hook',
+        api_key='beta_secret',
+        active=True,
+    )
+    app_db.add_all([ep1, ep2])
+    app_db.commit()
+    ep1_id, ep2_id = ep1.id, ep2.id
+
+    try:
+        mock_alpha = respx.post('https://alpha.example.com/hook').mock(return_value=httpx.Response(200))
+        mock_beta = respx.post('https://beta.example.com/hook').mock(return_value=httpx.Response(200))
+
+        # -- 1. Simulate TC2 request ---------------------------------------
+        tc2_payload = {
+            'events': [
+                {
+                    'branch': 99,
+                    'action': 'REMOVED_A_LABEL_FROM_A_SERVICE',
+                    'topic': 'SERVICES',
+                    'data': {'id': 1001, 'label': 'Premium'},
+                },
+                {
+                    'branch': 99,
+                    'action': 'ADDED_A_LABEL_TO_A_SERVICE',
+                    'topic': 'SERVICES',
+                    'data': {'id': 1002, 'label': 'Standard'},
+                },
+                {'branch': 99, 'action': 'UPDATED_A_SERVICE', 'topic': 'SERVICES', 'data': {'id': 1003}},
+            ],
+            'request_time': 1771509452,
+        }
+        headers = _get_webhook_headers()
+        r = client.post(send_webhook_url, data=json.dumps(tc2_payload), headers=headers)
+        assert r.status_code == 200
+
+        # -- 2. Verify ingress splitting: 3 events → 3 individual jobs -----
+        assert job_queue.get_queue_length(99) == 3
+
+        queued_payloads = []
+        for _ in range(3):
+            peeked = job_queue.peek(99)
+            parsed = json.loads(peeked.kwargs['payload'])
+            queued_payloads.append(parsed)
+            assert len(parsed['events']) == 1, 'Each queued job must carry exactly one event'
+            assert parsed['request_time'] == 1771509452
+            assert peeked.kwargs.get('url_extension') is None
+            job_queue.ack(99)
+
+        queued_actions = sorted(p['events'][0]['action'] for p in queued_payloads)
+        assert queued_actions == sorted(e['action'] for e in tc2_payload['events'])
+
+        # Re-enqueue so dispatch_cycle can process them
+        for p in queued_payloads:
+            job_queue.enqueue(task_send_webhooks.name, branch_id=99, payload=json.dumps(p), url_extension=None)
+
+        # -- 3. dispatch_cycle → apply_async --------------------------------
+        # dispatch_cycle processes one job per branch per cycle; all 3 jobs
+        # sit on the same branch, so we need 3 cycles to drain the queue.
+        with patch.object(task_send_webhooks, 'apply_async') as mock_apply:
+            total_dispatched = 0
+            for _ in range(3):
+                total_dispatched += dispatch_cycle(batch_limit=10)
+        assert total_dispatched == 3
+        assert mock_apply.call_count == 3
+
+        # -- 4. Execute each dispatched task --------------------------------
+        for call in mock_apply.call_args_list:
+            task_kwargs = call.kwargs['kwargs']
+            task_send_webhooks(**task_kwargs)
+
+        # -- 5. Verify downstream HTTP delivery -----------------------------
+        assert mock_alpha.call_count == 3
+        assert mock_beta.call_count == 3
+
+        for mock_ep, api_key in [(mock_alpha, 'alpha_secret'), (mock_beta, 'beta_secret')]:
+            delivered_actions = []
+            for http_call in mock_ep.calls:
+                body = json.loads(http_call.request.content)
+                assert len(body['events']) == 1, 'Downstream must receive single-event payloads'
+                assert body['request_time'] == 1771509452
+                delivered_actions.append(body['events'][0]['action'])
+
+                # Verify HMAC is computed on the individual payload, not the original
+                expected_sig = hmac.new(
+                    api_key.encode(),
+                    http_call.request.content,
+                    hashlib.sha256,
+                ).hexdigest()
+                assert http_call.request.headers['webhook-signature'] == expected_sig
+
+            assert sorted(delivered_actions) == sorted(e['action'] for e in tc2_payload['events'])
+
+        # -- 6. Verify WebhookLog rows -------------------------------------
+        app_db.expire_all()
+        logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_([ep1_id, ep2_id]))).all()
+        assert len(logs) == 6  # 3 events × 2 endpoints
+
+        for ep_id in [ep1_id, ep2_id]:
+            ep_logs = [log for log in logs if log.webhook_endpoint_id == ep_id]
+            assert len(ep_logs) == 3
+            for log in ep_logs:
+                assert log.status == 'Success'
+                assert log.status_code == 200
+                body = json.loads(log.request_body)
+                assert len(body['events']) == 1
+
+    finally:
+        app_db.exec(sa_delete(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_([ep1_id, ep2_id])))
+        app_db.exec(sa_delete(WebhookEndpoint).where(WebhookEndpoint.id.in_([ep1_id, ep2_id])))
+        app_db.commit()
+
+
+@respx.mock
+def test_e2e_tc2_public_profile_webhook_no_split_with_url_extension(
+    session: Session, client: TestClient, app_db: Session
+):
+    """
+    A TCPublicProfileWebhook (no events key) hits the url_extension endpoint.
+
+    Expected behaviour:
+      1.  The view passes the raw dict to dispatch_branch_task.
+      2.  dispatch_branch_task sees no 'events' key and enqueues the payload
+          as-is (single job, no splitting), preserving url_extension.
+      3.  dispatch_cycle hands it to Celery.
+      4.  task_send_webhooks delivers the full profile payload to the endpoint
+          with the url_extension appended to the URL.
+      5.  One WebhookLog row is written containing the complete profile fields.
+    """
+    from sqlalchemy import delete as sa_delete
+
+    # -- Setup: one active endpoint for branch 99 --------------------------
+    ep = WebhookEndpoint(
+        tc_id=601,
+        name='profile-hook',
+        branch_id=99,
+        webhook_url='https://profile.example.com/hook',
+        api_key='profile_secret',
+        active=True,
+    )
+    app_db.add(ep)
+    app_db.commit()
+    ep_id = ep.id
+
+    try:
+        mock_endpoint = respx.post('https://profile.example.com/hook/test').mock(
+            return_value=httpx.Response(200),
+        )
+
+        # -- 1. Simulate TC2 public profile request -------------------------
+        profile_payload = get_dft_con_webhook_data()
+        headers = _get_webhook_headers()
+        r = client.post(send_webhook_with_extension_url, data=json.dumps(profile_payload), headers=headers)
+        assert r.status_code == 200
+
+        # -- 2. Verify no splitting: exactly 1 job --------------------------
+        assert job_queue.get_queue_length(99) == 1
+
+        peeked = job_queue.peek(99)
+        assert peeked.task_name == task_send_webhooks.name
+        assert peeked.kwargs['url_extension'] == 'test'
+
+        queued_body = json.loads(peeked.kwargs['payload'])
+        assert 'events' not in queued_body, 'Profile payloads must not acquire an events key'
+        assert queued_body['branch_id'] == profile_payload['branch_id']
+        assert queued_body['first_name'] == profile_payload['first_name']
+        assert queued_body['request_time'] == profile_payload['request_time']
+
+        # -- 3. dispatch_cycle → apply_async --------------------------------
+        with patch.object(task_send_webhooks, 'apply_async') as mock_apply:
+            dispatched = dispatch_cycle(batch_limit=10)
+        assert dispatched == 1
+        assert mock_apply.call_count == 1
+
+        # -- 4. Execute the dispatched task ---------------------------------
+        task_kwargs = mock_apply.call_args_list[0].kwargs['kwargs']
+        assert task_kwargs['url_extension'] == 'test'
+        task_send_webhooks(**task_kwargs)
+
+        # -- 5. Verify downstream HTTP delivery -----------------------------
+        assert mock_endpoint.call_count == 1
+
+        http_call = mock_endpoint.calls[0]
+        delivered_body = json.loads(http_call.request.content)
+        assert 'events' not in delivered_body
+        assert delivered_body['branch_id'] == profile_payload['branch_id']
+        assert delivered_body['first_name'] == profile_payload['first_name']
+
+        # Verify HMAC
+        expected_sig = hmac.new(
+            b'profile_secret',
+            http_call.request.content,
+            hashlib.sha256,
+        ).hexdigest()
+        assert http_call.request.headers['webhook-signature'] == expected_sig
+
+        # -- 6. Verify WebhookLog -------------------------------------------
+        app_db.expire_all()
+        logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id)).all()
+        assert len(logs) == 1
+
+        log = logs[0]
+        assert log.status == 'Success'
+        assert log.status_code == 200
+        log_body = json.loads(log.request_body)
+        assert 'events' not in log_body
+        assert log_body['branch_id'] == profile_payload['branch_id']
+
+    finally:
+        app_db.exec(sa_delete(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id))
+        app_db.exec(sa_delete(WebhookEndpoint).where(WebhookEndpoint.id == ep_id))
+        app_db.commit()

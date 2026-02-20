@@ -141,7 +141,7 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                     # looks like for PR #120 we should keep this code as it is because on deployment, the task queue will still have
                     # payloads of the old consolidated type which require to be split or there may be a bunch of Zapier errors.
 
-                    # TODO: remove the splitting logic after Issue #119 is deployed
+                    # TODO: remove the splitting logic here after Issue #119 fix is deployed
                     single_event_payload = copy.deepcopy({k: v for k, v in loaded_payload.items() if k != 'events'})
                     single_event_payload['events'] = [copy.deepcopy(event)]
                     payloads_to_send.append(single_event_payload)
@@ -299,9 +299,6 @@ def _delete_old_logs_job():
     cache.delete(DELETE_JOBS_KEY)
 
 
-GLOBAL_BRANCH_ID = 0
-
-
 def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
     """
     Dispatches a task to per branch queue for fair round robin processing.
@@ -316,7 +313,7 @@ def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
 
     events = payload.get('events')
     if not events:
-        # Non-event payloads (e.g. TCPublicProfileWebhook) — enqueue as-is
+        # Non event payloads like TCPublicProfileWebhook enqueue as it is
         job_queue.enqueue(task.name, branch_id=branch_id, payload=json.dumps(payload), url_extension=url_extension)
         return
 
