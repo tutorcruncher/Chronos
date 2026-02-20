@@ -804,3 +804,363 @@ def test_e2e_tc2_public_profile_webhook_no_split_with_url_extension(
         app_db.exec(sa_delete(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id))
         app_db.exec(sa_delete(WebhookEndpoint).where(WebhookEndpoint.id == ep_id))
         app_db.commit()
+
+
+@respx.mock
+def test_e2e_multi_tenant_isolation_no_cross_delivery(session: Session, client: TestClient, app_db: Session):
+    """
+    Two branches (99 and 199) each receive webhooks via the API. Endpoints
+    for branch 99 must never receive branch 199's events and vice versa.
+
+    Setup:
+      - Branch 99: 2 endpoints (alpha, beta), 2-event payload
+      - Branch 199: 1 endpoint (gamma), 1-event payload
+
+    Verifies:
+      - Ingress splitting produces correct per-branch queue lengths
+      - dispatch_cycle dispatches one job per branch per cycle (round-robin)
+      - task_send_webhooks delivers only to the correct branch's endpoints
+      - WebhookLog rows are isolated per branch — no cross-delivery
+    """
+    from sqlalchemy import delete as sa_delete
+
+    ep_alpha = WebhookEndpoint(
+        tc_id=701,
+        name='alpha-hook',
+        branch_id=99,
+        webhook_url='https://mt-alpha.example.com/hook',
+        api_key='alpha_key',
+        active=True,
+    )
+    ep_beta = WebhookEndpoint(
+        tc_id=702,
+        name='beta-hook',
+        branch_id=99,
+        webhook_url='https://mt-beta.example.com/hook',
+        api_key='beta_key',
+        active=True,
+    )
+    ep_gamma = WebhookEndpoint(
+        tc_id=703,
+        name='gamma-hook',
+        branch_id=199,
+        webhook_url='https://mt-gamma.example.com/hook',
+        api_key='gamma_key',
+        active=True,
+    )
+    app_db.add_all([ep_alpha, ep_beta, ep_gamma])
+    app_db.commit()
+    ep_alpha_id, ep_beta_id, ep_gamma_id = ep_alpha.id, ep_beta.id, ep_gamma.id
+
+    try:
+        mock_alpha = respx.post('https://mt-alpha.example.com/hook').mock(return_value=httpx.Response(200))
+        mock_beta = respx.post('https://mt-beta.example.com/hook').mock(return_value=httpx.Response(200))
+        mock_gamma = respx.post('https://mt-gamma.example.com/hook').mock(return_value=httpx.Response(200))
+
+        # -- 1. Simulate TC2 requests for both branches ----------------------
+        headers = _get_webhook_headers()
+
+        payload_99 = {
+            'events': [
+                {'branch': 99, 'action': 'REMOVED_A_LABEL_FROM_A_SERVICE', 'topic': 'SERVICES', 'data': {'id': 2001}},
+                {'branch': 99, 'action': 'ADDED_A_LABEL_TO_A_SERVICE', 'topic': 'SERVICES', 'data': {'id': 2002}},
+            ],
+            'request_time': 1771509452,
+        }
+        payload_199 = {
+            'events': [
+                {'branch': 199, 'action': 'UPDATED_A_SERVICE', 'topic': 'SERVICES', 'data': {'id': 3001}},
+            ],
+            'request_time': 1771509453,
+        }
+
+        r = client.post(send_webhook_url, data=json.dumps(payload_99), headers=headers)
+        assert r.status_code == 200
+        r = client.post(send_webhook_url, data=json.dumps(payload_199), headers=headers)
+        assert r.status_code == 200
+
+        # -- 2. Verify ingress splitting per branch --------------------------
+        assert job_queue.get_queue_length(99) == 2
+        assert job_queue.get_queue_length(199) == 1
+
+        # -- 3. dispatch_cycle → apply_async ---------------------------------
+        with patch.object(task_send_webhooks, 'apply_async') as mock_apply:
+            # Cycle 1: one from each branch = 2 dispatched
+            d1 = dispatch_cycle(batch_limit=100)
+            assert d1 == 2
+            assert job_queue.get_queue_length(99) == 1
+            assert job_queue.get_queue_length(199) == 0
+
+            # Cycle 2: only branch 99 remaining = 1 dispatched
+            d2 = dispatch_cycle(batch_limit=100)
+            assert d2 == 1
+            assert not job_queue.has_active_jobs()
+
+            assert mock_apply.call_count == 3
+
+        # -- 4. Execute each dispatched task ---------------------------------
+        for call in mock_apply.call_args_list:
+            task_send_webhooks(**call.kwargs['kwargs'])
+
+        # -- 5. Verify HTTP isolation ----------------------------------------
+        # Branch 99 endpoints: alpha and beta each receive 2 calls (one per split event)
+        assert mock_alpha.call_count == 2
+        assert mock_beta.call_count == 2
+        for mock_ep in [mock_alpha, mock_beta]:
+            for http_call in mock_ep.calls:
+                body = json.loads(http_call.request.content)
+                assert len(body['events']) == 1
+                assert body['events'][0]['branch'] == 99, 'Branch 99 endpoint must not receive branch 199 events'
+
+        # Branch 199 endpoint: gamma receives exactly 1 call
+        assert mock_gamma.call_count == 1
+        gamma_body = json.loads(mock_gamma.calls[0].request.content)
+        assert len(gamma_body['events']) == 1
+        assert gamma_body['events'][0]['branch'] == 199, 'Branch 199 endpoint must not receive branch 99 events'
+
+        # -- 6. Verify WebhookLog isolation ----------------------------------
+        app_db.expire_all()
+        all_ep_ids = [ep_alpha_id, ep_beta_id, ep_gamma_id]
+        logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_(all_ep_ids))).all()
+        assert len(logs) == 5  # 2 events × 2 endpoints + 1 event × 1 endpoint
+
+        b99_logs = [wl for wl in logs if wl.webhook_endpoint_id in (ep_alpha_id, ep_beta_id)]
+        assert len(b99_logs) == 4
+        for log in b99_logs:
+            assert log.status == 'Success'
+            assert log.status_code == 200
+            body = json.loads(log.request_body)
+            assert body['events'][0]['branch'] == 99
+
+        b199_logs = [wl for wl in logs if wl.webhook_endpoint_id == ep_gamma_id]
+        assert len(b199_logs) == 1
+        assert b199_logs[0].status == 'Success'
+        body = json.loads(b199_logs[0].request_body)
+        assert body['events'][0]['branch'] == 199
+
+    finally:
+        app_db.exec(
+            sa_delete(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_([ep_alpha_id, ep_beta_id, ep_gamma_id]))
+        )
+        app_db.exec(sa_delete(WebhookEndpoint).where(WebhookEndpoint.id.in_([ep_alpha_id, ep_beta_id, ep_gamma_id])))
+        app_db.commit()
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_dispatch_cycle_multi_tenant_one_job_per_branch_per_cycle_after_split(mock_apply):
+    """
+    After ingress splitting, dispatch_cycle dispatches exactly one job per
+    branch per cycle, ensuring round-robin fairness regardless of per-branch
+    queue depth.
+
+    Setup (no DB or HTTP — pure queue + dispatcher test):
+      - Branch 99: 3-event payload → 3 individual jobs after split
+      - Branch 199: 2-event payload → 2 individual jobs after split
+
+    Verifies:
+      - dispatch_branch_task splits events into individual jobs
+      - Each dispatch_cycle dispatches at most one job per branch
+      - Dispatched kwargs carry the correct branch's events
+    """
+    # -- 1. Enqueue via dispatch_branch_task (ingress split) -----------------
+    payload_99 = {
+        'events': [
+            {'branch': 99, 'action': 'ACTION_A', 'topic': 'SERVICES', 'data': {'id': 1}},
+            {'branch': 99, 'action': 'ACTION_B', 'topic': 'SERVICES', 'data': {'id': 2}},
+            {'branch': 99, 'action': 'ACTION_C', 'topic': 'SERVICES', 'data': {'id': 3}},
+        ],
+        'request_time': 1771509452,
+    }
+    payload_199 = {
+        'events': [
+            {'branch': 199, 'action': 'ACTION_X', 'topic': 'SERVICES', 'data': {'id': 10}},
+            {'branch': 199, 'action': 'ACTION_Y', 'topic': 'SERVICES', 'data': {'id': 11}},
+        ],
+        'request_time': 1771509453,
+    }
+
+    dispatch_branch_task(task_send_webhooks, branch_id=99, payload=payload_99)
+    dispatch_branch_task(task_send_webhooks, branch_id=199, payload=payload_199)
+
+    assert job_queue.get_queue_length(99) == 3
+    assert job_queue.get_queue_length(199) == 2
+
+    # -- 2. Cycle 1: one job from each branch --------------------------------
+    d1 = dispatch_cycle(batch_limit=100)
+    assert d1 == 2
+    assert job_queue.get_queue_length(99) == 2
+    assert job_queue.get_queue_length(199) == 1
+
+    dispatched_branches_c1 = set()
+    for call in mock_apply.call_args_list:
+        payload_str = call.kwargs['kwargs']['payload']
+        branch = json.loads(payload_str)['events'][0]['branch']
+        dispatched_branches_c1.add(branch)
+    assert dispatched_branches_c1 == {99, 199}
+
+    # -- 3. Cycle 2: one from each again ------------------------------------
+    mock_apply.reset_mock()
+    d2 = dispatch_cycle(batch_limit=100)
+    assert d2 == 2
+    assert job_queue.get_queue_length(99) == 1
+    assert job_queue.get_queue_length(199) == 0
+
+    dispatched_branches_c2 = set()
+    for call in mock_apply.call_args_list:
+        payload_str = call.kwargs['kwargs']['payload']
+        branch = json.loads(payload_str)['events'][0]['branch']
+        dispatched_branches_c2.add(branch)
+    assert dispatched_branches_c2 == {99, 199}
+
+    # -- 4. Cycle 3: only branch 99 remaining --------------------------------
+    mock_apply.reset_mock()
+    d3 = dispatch_cycle(batch_limit=100)
+    assert d3 == 1
+    assert not job_queue.has_active_jobs()
+
+    payload_str = mock_apply.call_args_list[0].kwargs['kwargs']['payload']
+    assert json.loads(payload_str)['events'][0]['branch'] == 99
+
+
+@respx.mock
+def test_e2e_large_tenant_backlog_does_not_cross_tenant_delivery(session: Session, client: TestClient, app_db: Session):
+    """
+    Branch 99 sends a webhook with 5 events while branch 199 sends just 1.
+    The round-robin dispatcher must deliver branch 199's single event in
+    the very first cycle — not blocked behind branch 99's backlog — and
+    no events may leak across branch boundaries.
+
+    Setup:
+      - Branch 99: 2 endpoints (alpha, beta), 5-event payload
+      - Branch 199: 1 endpoint (gamma), 1-event payload
+
+    Verifies:
+      - Branch 199 is dispatched in cycle 1 alongside branch 99's first event
+      - Branch 99's remaining 4 events drain over 4 subsequent cycles
+      - HTTP call counts: alpha=5, beta=5, gamma=1
+      - WebhookLog rows: 10 for branch 99 (5×2), 1 for branch 199
+      - Zero cross-branch delivery in HTTP bodies and logs
+    """
+    from sqlalchemy import delete as sa_delete
+
+    ep_alpha = WebhookEndpoint(
+        tc_id=801,
+        name='alpha-hook',
+        branch_id=99,
+        webhook_url='https://lt-alpha.example.com/hook',
+        api_key='alpha_key',
+        active=True,
+    )
+    ep_beta = WebhookEndpoint(
+        tc_id=802,
+        name='beta-hook',
+        branch_id=99,
+        webhook_url='https://lt-beta.example.com/hook',
+        api_key='beta_key',
+        active=True,
+    )
+    ep_gamma = WebhookEndpoint(
+        tc_id=803,
+        name='gamma-hook',
+        branch_id=199,
+        webhook_url='https://lt-gamma.example.com/hook',
+        api_key='gamma_key',
+        active=True,
+    )
+    app_db.add_all([ep_alpha, ep_beta, ep_gamma])
+    app_db.commit()
+    ep_alpha_id, ep_beta_id, ep_gamma_id = ep_alpha.id, ep_beta.id, ep_gamma.id
+
+    try:
+        mock_alpha = respx.post('https://lt-alpha.example.com/hook').mock(return_value=httpx.Response(200))
+        mock_beta = respx.post('https://lt-beta.example.com/hook').mock(return_value=httpx.Response(200))
+        mock_gamma = respx.post('https://lt-gamma.example.com/hook').mock(return_value=httpx.Response(200))
+
+        headers = _get_webhook_headers()
+
+        payload_99 = {
+            'events': [
+                {'branch': 99, 'action': f'ACTION_{i}', 'topic': 'SERVICES', 'data': {'id': 4000 + i}} for i in range(5)
+            ],
+            'request_time': 1771509452,
+        }
+        payload_199 = {
+            'events': [
+                {'branch': 199, 'action': 'SINGLE_ACTION', 'topic': 'SERVICES', 'data': {'id': 5001}},
+            ],
+            'request_time': 1771509453,
+        }
+
+        r = client.post(send_webhook_url, data=json.dumps(payload_99), headers=headers)
+        assert r.status_code == 200
+        r = client.post(send_webhook_url, data=json.dumps(payload_199), headers=headers)
+        assert r.status_code == 200
+
+        # -- Verify ingress split counts ------------------------------------
+        assert job_queue.get_queue_length(99) == 5
+        assert job_queue.get_queue_length(199) == 1
+
+        # -- Dispatch all jobs via round-robin cycles -----------------------
+        with patch.object(task_send_webhooks, 'apply_async') as mock_apply:
+            # Cycle 1: branch 99 (1) + branch 199 (1) = 2.
+            # Branch 199 is NOT blocked behind branch 99's 5-event backlog.
+            d1 = dispatch_cycle(batch_limit=100)
+            assert d1 == 2
+            assert job_queue.get_queue_length(99) == 4
+            assert job_queue.get_queue_length(199) == 0
+
+            # Cycles 2–5: only branch 99 remains, 1 dispatched per cycle
+            for expected_remaining in [3, 2, 1, 0]:
+                d = dispatch_cycle(batch_limit=100)
+                assert d == 1
+                assert job_queue.get_queue_length(99) == expected_remaining
+
+            assert not job_queue.has_active_jobs()
+            assert mock_apply.call_count == 6  # 5 from branch 99 + 1 from branch 199
+
+        # -- Execute all dispatched tasks -----------------------------------
+        for call in mock_apply.call_args_list:
+            task_send_webhooks(**call.kwargs['kwargs'])
+
+        # -- Verify HTTP delivery counts ------------------------------------
+        assert mock_alpha.call_count == 5
+        assert mock_beta.call_count == 5
+        assert mock_gamma.call_count == 1
+
+        # -- Verify branch isolation in HTTP bodies -------------------------
+        for mock_ep in [mock_alpha, mock_beta]:
+            for http_call in mock_ep.calls:
+                body = json.loads(http_call.request.content)
+                assert len(body['events']) == 1
+                assert body['events'][0]['branch'] == 99, 'Branch 99 endpoint must not receive branch 199 events'
+
+        gamma_body = json.loads(mock_gamma.calls[0].request.content)
+        assert len(gamma_body['events']) == 1
+        assert gamma_body['events'][0]['branch'] == 199, 'Branch 199 endpoint must not receive branch 99 events'
+
+        # -- Verify WebhookLog counts and isolation -------------------------
+        app_db.expire_all()
+        all_ep_ids = [ep_alpha_id, ep_beta_id, ep_gamma_id]
+        logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_(all_ep_ids))).all()
+        assert len(logs) == 11  # 5 events × 2 endpoints + 1 event × 1 endpoint
+
+        b99_logs = [wl for wl in logs if wl.webhook_endpoint_id in (ep_alpha_id, ep_beta_id)]
+        assert len(b99_logs) == 10
+        for log in b99_logs:
+            assert log.status == 'Success'
+            assert log.status_code == 200
+            body = json.loads(log.request_body)
+            assert body['events'][0]['branch'] == 99
+
+        b199_logs = [wl for wl in logs if wl.webhook_endpoint_id == ep_gamma_id]
+        assert len(b199_logs) == 1
+        assert b199_logs[0].status == 'Success'
+        body = json.loads(b199_logs[0].request_body)
+        assert body['events'][0]['branch'] == 199
+
+    finally:
+        app_db.exec(
+            sa_delete(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_([ep_alpha_id, ep_beta_id, ep_gamma_id]))
+        )
+        app_db.exec(sa_delete(WebhookEndpoint).where(WebhookEndpoint.id.in_([ep_alpha_id, ep_beta_id, ep_gamma_id])))
+        app_db.commit()
