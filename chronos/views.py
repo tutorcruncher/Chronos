@@ -75,7 +75,7 @@ def send_webhooks(
         dispatch_branch_task(
             task_send_webhooks,
             branch_id=branch_id,
-            payload=json.dumps(webhook_payload),
+            payload=webhook_payload,
             url_extension=url_extension,
         )
     else:

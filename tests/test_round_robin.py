@@ -88,13 +88,14 @@ def test_extract_branch_id_rejects_invalid_values():
 
 
 def test_dispatch_branch_task_enqueues_with_task_name_and_kwargs():
-    dispatch_branch_task(task_send_webhooks, branch_id=42, payload='test_payload', url_extension='ext')
+    payload = {'branch_id': 42, 'id': 7}
+    dispatch_branch_task(task_send_webhooks, branch_id=42, payload=payload, url_extension='ext')
 
     assert job_queue.has_active_jobs()
     peeked = job_queue.peek(42)
     assert peeked is not None
     assert peeked.task_name == task_send_webhooks.name
-    assert peeked.kwargs == {'payload': 'test_payload', 'url_extension': 'ext'}
+    assert peeked.kwargs == {'payload': json.dumps(payload), 'url_extension': 'ext'}
     assert peeked.branch_id == 42
 
 

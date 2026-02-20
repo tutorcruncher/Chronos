@@ -137,6 +137,11 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                     # for batched events requests from TC2 we want to split each action event
                     # into their individual requests to the downstream endpoint. This is done for reverse compability
                     # with zapier and other client integration
+
+                    # looks like for PR #120 we should keep this code as it is because on deployment, the task queue will still have
+                    # payloads of the old consolidated type which require to be split or there may be a bunch of Zapier errors.
+
+                    # TODO: remove the splitting logic after Issue #119 is deployed
                     single_event_payload = copy.deepcopy({k: v for k, v in loaded_payload.items() if k != 'events'})
                     single_event_payload['events'] = [copy.deepcopy(event)]
                     payloads_to_send.append(single_event_payload)
@@ -300,8 +305,29 @@ GLOBAL_BRANCH_ID = 0
 def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
     """
     Dispatches a task to per branch queue for fair round robin processing.
+
+    For poyloads with N events, split such that:
+    P({e1, e2, ..., eN}) -> [P({e1}), P({e2}), ..., P({eN})]
     """
-    job_queue.enqueue(task.name, branch_id=branch_id, **kwargs)
+    payload = kwargs.pop('payload', None)
+    url_extension = kwargs.pop('url_extension', None)
+    if not payload:
+        return
+
+    events = payload.get('events')
+    if not events:
+        # Non-event payloads (e.g. TCPublicProfileWebhook) — enqueue as-is
+        job_queue.enqueue(task.name, branch_id=branch_id, payload=json.dumps(payload), url_extension=url_extension)
+        return
+
+    request_time = payload['request_time']
+    for event in events:
+        job_queue.enqueue(
+            task.name,
+            branch_id=branch_id,
+            payload=json.dumps({'events': [event], 'request_time': request_time}),
+            url_extension=url_extension,
+        )
 
 
 @celery_app.task(name='job_dispatcher', acks_late=False)
