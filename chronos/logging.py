@@ -21,7 +21,6 @@ config = {
         'access': {'formatter': 'access', 'class': 'logging.StreamHandler', 'stream': 'ext://sys.stdout'},
     },
     'loggers': {
-        'base': {'handlers': ['default'], 'level': logging_level, 'propagate': False},
         'chronos': {'handlers': ['default'], 'level': logging_level, 'propagate': False},
         'uvicorn': {'handlers': ['default'], 'level': logging_level, 'propagate': False},
         'uvicorn.error': {'level': logging_level},
