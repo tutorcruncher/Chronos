@@ -64,6 +64,11 @@ def init_worker_process(**kwargs):
     This ensures each worker gets fresh connections instead of inheriting
     stale connections from the parent process, preventing SSL SYSCALL errors.
     """
+    import logging.config
+
+    from chronos.logging import config
+
+    logging.config.dictConfig(config)
     app_logger.info('Disposing database engine pool for worker process')
     engine.dispose()
 
