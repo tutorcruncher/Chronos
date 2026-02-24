@@ -125,6 +125,8 @@ def dispatch_cycle(batch_limit: int = settings.dispatcher_batch_limit):
             continue
         finally:
             if token is not None:
+                # since otel context is a thread local context, we need to detach it here else the next branch
+                # context will still be under the previous branch trace.
                 otel_context.detach(token)
 
         # Phase 3 Post-dispatch ob was dispatched, ack it off the queue.
