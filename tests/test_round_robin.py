@@ -270,7 +270,7 @@ def test_worker_ready_starts_dispatcher_only_on_dispatcher_queue():
 
     with patch('chronos.worker.job_dispatcher_task') as mock_task:
         start_dispatcher_on_worker_ready(sender=mock_sender)
-        mock_task.delay.assert_called_once()
+        mock_task.apply_async.assert_called_once_with(countdown=60)
 
     mock_queue_regular = MagicMock()
     mock_queue_regular.name = 'celery'
@@ -279,7 +279,7 @@ def test_worker_ready_starts_dispatcher_only_on_dispatcher_queue():
 
     with patch('chronos.worker.job_dispatcher_task') as mock_task:
         start_dispatcher_on_worker_ready(sender=mock_sender_regular)
-        mock_task.delay.assert_not_called()
+        mock_task.apply_async.assert_not_called()
 
 
 def test_task_send_webhooks_missing_request_time_behavior(session: Session, client: TestClient):
