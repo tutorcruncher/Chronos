@@ -21,4 +21,4 @@ def start_dispatcher_on_worker_ready(sender, **kwargs):
         # at the bottom of worker.py, so worker.py isn't fully loaded yet.
         from chronos.worker import job_dispatcher_task
 
-        job_dispatcher_task.delay()
+        job_dispatcher_task.apply_async(countdown=60)
