@@ -14,6 +14,7 @@ def configure_logfire():
         token=settings.logfire_token,
         send_to_logfire=True,
         console=False,
+        distributed_tracing=True,
     )
     _configured = True
 
