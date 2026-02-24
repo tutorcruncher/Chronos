@@ -96,7 +96,8 @@ def dispatch_cycle(batch_limit: int = settings.dispatcher_batch_limit):
                 dispatch_logger.exception('Failed to ack poison job for branch %d', branch_id)
             continue
 
-        # Phase 2: restore original request trace context and dispatch.
+        # Phase 2 is dispatch where failures here DON'T ack.
+        # First restore the original request trace context, then dispatch.
         # apply_async() can fail from broker errors or permanent
         # serialization errors. We can't distinguish them, so we leave the job
         # in the queue and skip this branch for now. Transient errors resolve
