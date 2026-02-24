@@ -16,6 +16,7 @@ from celery.app import Celery
 from celery.signals import worker_process_init
 from fastapi import APIRouter, FastAPI
 from httpx import AsyncClient
+from opentelemetry import context as otel_context
 from redis import Redis
 from sqlalchemy import delete, func
 from sqlmodel import Session, select
@@ -67,6 +68,11 @@ def init_worker_process(**kwargs):
     app_logger.info('Disposing database engine pool for worker process')
     engine.dispose()
 
+    from chronos.observability import instrument_worker
+
+    if bool(settings.logfire_token):
+        instrument_worker()
+
 
 async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, webhook_sig: str, data: dict = None):
     """
@@ -78,8 +84,6 @@ async def webhook_request(client: AsyncClient, url: str, endpoint_id: int, *, we
     :param data: The Webhook data supplied by TC2
     :return: WebhookEndpoint response
     """
-    from chronos.main import logfire
-
     headers = {
         'User-Agent': 'TutorCruncher',
         'Content-Type': 'application/json',
@@ -364,13 +368,17 @@ def job_dispatcher_task(
                 time.sleep(cycle_delay)
                 continue
 
-            with logfire.span('Dispatching jobs') as span:
-                dispatched = dispatch_cycle()
-                if dispatched > 0:
-                    # without this gaurd the cycle will log every 10ms it finds nothing
-                    # in the dispatcher queue which can be noisy
-                    span.message = f'Dispatched {dispatched} jobs'
-                    app_logger.info('Dispatched %d jobs', dispatched)
+            cycle_token = otel_context.attach(otel_context.Context())
+            try:
+                with logfire.span('Dispatching jobs') as span:
+                    dispatched = dispatch_cycle()
+                    if dispatched > 0:
+                        # without this gaurd the cycle will log every 10ms it finds nothing
+                        # in the dispatcher queue which can be noisy
+                        span.message = f'Dispatched {dispatched} jobs'
+                        app_logger.info('Dispatched %d jobs', dispatched)
+            finally:
+                otel_context.detach(cycle_token)
 
             time.sleep(cycle_delay)
         except SoftTimeLimitExceeded:

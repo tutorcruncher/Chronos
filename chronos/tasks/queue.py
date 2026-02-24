@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any, Optional
 
 import redis
+from opentelemetry.propagate import inject
 from pydantic import BaseModel
 
 from chronos.utils import settings
@@ -21,6 +22,7 @@ class JobPayload(BaseModel):
     branch_id: int
     kwargs: dict[str, Any]
     enqueued_at: datetime
+    trace_context: dict[str, str] | None = None
 
 
 class JobQueue:
@@ -56,11 +58,15 @@ class JobQueue:
             routing_branch_id: Branch ID for queue routing (not passed to the task).
             **kwargs: Arguments to pass to the task.
         """
+        trace_context: dict[str, str] = {}
+        inject(trace_context)
+
         payload = JobPayload(
             task_name=task_name,
             branch_id=branch_id,
             kwargs=kwargs,
             enqueued_at=datetime.now(UTC),
+            trace_context=trace_context or None,
         )
         queue_key = self._get_queue_key(branch_id)
 

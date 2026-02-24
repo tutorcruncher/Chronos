@@ -1,7 +1,6 @@
 import logging.config
 import os
 
-import logfire
 import sentry_sdk
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
@@ -31,17 +30,9 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=
 
 
 if bool(_app_settings.logfire_token):
-    logfire.configure(
-        service_name='chronos',
-        token=_app_settings.logfire_token,
-        send_to_logfire=True,
-        console=False,
-    )
-    logfire.instrument_fastapi(app)
-    logfire.instrument_celery()
-    logfire.instrument_pydantic(record=_app_settings.logfire_log_level)
-    logfire.instrument_psycopg()
-    logfire.instrument_requests()
+    from chronos.observability import instrument_web_app
+
+    instrument_web_app(app)
 
 logging.config.dictConfig(config)
 # Remove excessive sqlalchemy logging

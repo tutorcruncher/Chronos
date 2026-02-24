@@ -23,6 +23,8 @@ import json
 import logging
 from bisect import bisect_right
 
+from opentelemetry import context as otel_context
+from opentelemetry.propagate import extract
 from pydantic import ValidationError
 
 from chronos.utils import settings
@@ -94,21 +96,34 @@ def dispatch_cycle(batch_limit: int = settings.dispatcher_batch_limit):
                 dispatch_logger.exception('Failed to ack poison job for branch %d', branch_id)
             continue
 
-        # Phase 2 is dispatch where failures here DON'T ack.
+        # Phase 2: restore original request trace context and dispatch.
         # apply_async() can fail from broker errors or permanent
         # serialization errors. We can't distinguish them, so we leave the job
         # in the queue and skip this branch for now. Transient errors resolve
         # next cycle. Permanent errors stall only this branch (other branches
         # are unaffected) and produce repeated log errors for operator attention.
+        token = None
+        try:
+            if payload.trace_context:
+                tracectx = extract(payload.trace_context)
+                token = otel_context.attach(tracectx)
+        except Exception:
+            dispatch_logger.warning(
+                'Failed to restore trace context for branch %d, dispatching without trace link',
+                branch_id,
+            )
+            token = None
+
         try:
             task.apply_async(kwargs=payload.kwargs)
         except Exception:
             dispatch_logger.exception(
                 'Failed to dispatch %s for branch %d, will retry next cycle', payload.task_name, branch_id
             )
-            # so the concept is that the transient error will hopefully resolve next cycle
-            # don't really think we'll get a serialisation error here? Because they should be discarded in phase 1
             continue
+        finally:
+            if token is not None:
+                otel_context.detach(token)
 
         # Phase 3 Post-dispatch ob was dispatched, ack it off the queue.
         job_queue.ack(branch_id)
