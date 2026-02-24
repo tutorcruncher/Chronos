@@ -113,6 +113,7 @@ def dispatch_cycle(batch_limit: int = settings.dispatcher_batch_limit):
                 'Failed to restore trace context for branch %d, dispatching without trace link',
                 branch_id,
             )
+            # ensuring that the finally block doesn't detach a context that was never attached in the first place
             token = None
 
         try:
