@@ -1164,3 +1164,81 @@ def test_e2e_large_tenant_backlog_does_not_cross_tenant_delivery(session: Sessio
         )
         app_db.exec(sa_delete(WebhookEndpoint).where(WebhookEndpoint.id.in_([ep_alpha_id, ep_beta_id, ep_gamma_id])))
         app_db.commit()
+
+
+def _enqueue_with_trace_context(branch_id, trace_context):
+    """Helper: enqueue a job then overwrite it in Redis with a specific trace_context."""
+    from chronos.tasks.queue import JobPayload
+
+    job_queue.enqueue(task_send_webhooks.name, branch_id=branch_id, payload='p')
+    payload = JobPayload(
+        task_name=task_send_webhooks.name,
+        branch_id=branch_id,
+        kwargs={'payload': 'p'},
+        enqueued_at='2024-01-01T00:00:00+00:00',
+        trace_context=trace_context,
+    )
+    queue_key = f'jobs:branch:{branch_id}'
+    cache.lpop(queue_key)
+    cache.lpush(queue_key, payload.model_dump_json())
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_dispatch_cycle_attaches_trace_context_before_apply_async(mock_apply):
+    """When a job has trace_context, it is attached before apply_async and detached after."""
+    from opentelemetry import context as otel_context
+
+    _enqueue_with_trace_context(50, {'traceparent': '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01'})
+
+    attached_contexts = []
+    original_attach = otel_context.attach
+
+    def spy_attach(ctx):
+        token = original_attach(ctx)
+        attached_contexts.append(ctx)
+        return token
+
+    with patch('chronos.tasks.dispatcher.otel_context.attach', side_effect=spy_attach):
+        dispatched = dispatch_cycle()
+
+    assert dispatched == 1
+    assert len(attached_contexts) == 1, 'trace context should be attached exactly once'
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_dispatch_cycle_skips_trace_attach_when_no_trace_context(mock_apply):
+    """When a job has no trace_context (old format), dispatch proceeds without attach/detach."""
+    _enqueue_with_trace_context(60, None)
+
+    with patch('chronos.tasks.dispatcher.otel_context.attach') as mock_attach:
+        dispatched = dispatch_cycle()
+
+    assert dispatched == 1
+    mock_attach.assert_not_called()
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_dispatch_cycle_detaches_context_even_when_apply_async_fails(mock_apply):
+    """If apply_async raises, the trace context is still detached (no leaked context)."""
+    _enqueue_with_trace_context(70, {'traceparent': '00-cccccccccccccccccccccccccccccccc-dddddddddddddddd-01'})
+    mock_apply.side_effect = RuntimeError('broker down')
+
+    with patch('chronos.tasks.dispatcher.otel_context.detach') as mock_detach:
+        dispatched = dispatch_cycle()
+
+    assert dispatched == 0
+    mock_detach.assert_called_once()
+    assert job_queue.get_queue_length(70) == 1
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_dispatch_cycle_gracefully_handles_extract_failure(mock_apply):
+    """If extract() raises, dispatch still proceeds without a trace link."""
+    _enqueue_with_trace_context(80, {'traceparent': 'garbage-value'})
+
+    with patch('chronos.tasks.dispatcher.extract', side_effect=Exception('bad trace')):
+        dispatched = dispatch_cycle()
+
+    assert dispatched == 1
+    assert not job_queue.has_active_jobs()
+    mock_apply.assert_called_once()
