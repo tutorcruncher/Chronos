@@ -1,55 +1,51 @@
-.PHONY: install
+.PHONY: install install-dev lint format test reset-db create-db-tables run-server-dev run-server run-worker run-dispatcher
+
+# Install dependencies (normal packages only)
 install:
-	pip install -r requirements.txt
+	uv sync
 
-.PHONY: install-test
-install-test:
-	pip install -r tests/requirements.txt
+# Install dependencies (including dev packages)
+install-dev:
+	uv sync --dev
 
-.PHONY: lint
+# Lint code
 lint:
-	ruff check chronos/ tests/
-	ruff format chronos/ tests/ --check
+	uv run --active ruff check chronos/ tests/
+	uv run --active ruff format chronos/ tests/ --check
 
-.PHONY: format
+# Format code
 format:
-	ruff check chronos/ tests/ --fix
-	ruff format chronos/ tests/
+	uv run --active ruff check chronos/ tests/ --fix
+	uv run --active ruff format chronos/ tests/
 
-.PHONY: test
+# Run tests
 test:
-	testing=True pytest --cov=chronos
+	TESTING=True uv run pytest --cov=chronos
 
-.PHONY: reset-db-dev
+# Reset database
 reset-db:
 	psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS chronos"
 	psql -h localhost -U postgres -c "CREATE DATABASE chronos"
 	psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS test_chronos"
 	psql -h localhost -U postgres -c "CREATE DATABASE test_chronos"
-	python -m chronos.scripts.create_db_tables
+	uv run python -m chronos.scripts.create_db_tables
 
-.PHONY: create-db-tables
+# Create database tables
 create-db-tables:
-	python -m chronos.scripts.create_db_tables
+	uv run python -m chronos.scripts.create_db_tables
 
-.PHONY: install-dev
-install-dev:
-	pip install -r tests/requirements.txt
-	pip install -r requirements.txt
-	pip install devtools
-
-.PHONY: run-server-dev
+# Run development server
 run-server-dev:
-	python -m uvicorn chronos.main:app --reload --port=5000
+	uv run uvicorn chronos.main:app --reload --port=5000
 
-.PHONY: run-server
+# Run production server
 run-server:
-	python -m uvicorn chronos.main:app --port=${PORT} --host=${HOST}
+	uv run uvicorn chronos.main:app --port=${PORT} --host=${HOST}
 
-.PHONY: run-worker
+# Run Celery worker
 run-worker:
-	celery -A chronos.worker worker --loglevel=info --autoscale 4,2 -E
+	uv run celery -A chronos.worker worker --loglevel=info --autoscale 4,2 -E
 
-.PHONY: run-dispatcher
+# Run Celery dispatcher
 run-dispatcher:
-	celery -A chronos.worker worker -Q dispatcher -c 1 --without-heartbeat --without-mingle --soft-time-limit=0 --time-limit=0
+	uv run celery -A chronos.worker worker -Q dispatcher -c 1 --without-heartbeat --without-mingle --soft-time-limit=0 --time-limit=0
