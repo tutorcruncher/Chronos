@@ -1,3 +1,36 @@
+[project]
+name = "chronos"
+version = "0.1.0"
+description = "Chronos webhook and job service"
+requires-python = ">=3.12"
+dependencies = [
+    "apscheduler==3.11.2",
+    "celery==5.6.2",
+    "cryptography==46.0.5",
+    "fastapi==0.135.1",
+    "fastapi_utilities==0.3.1",
+    "httpx==0.28.1",
+    "logfire[fastapi,requests,psycopg2,celery]==4.29.0",
+    "pillow==12.1.1",
+    "psycopg2-binary==2.9.11",
+    "pydantic==2.12.5",
+    "pydantic-settings==2.13.1",
+    "redis==7.3.0",
+    "requests==2.32.5",
+    "respx==0.22.0",
+    "sentry-sdk==2.55.0",
+    "sqlmodel==0.0.37",
+    "uvicorn==0.42.0",
+]
+
+[dependency-groups]
+dev = [
+    "coverage==7.13.5",
+    "pytest==9.0.2",
+    "pytest-cov==7.0.0",
+    "ruff==0.15.6",
+]
+
 [tool.ruff]
     line-length = 120
 
@@ -10,10 +43,8 @@
 [tool.ruff.lint]
     extend-select = ['I']
 
-[tool.pytest]
-    testpaths = ['tests']
-
 [tool.pytest.ini_options]
+    testpaths = ['tests']
     addopts = '--tb=native'
     filterwarnings = []
 
