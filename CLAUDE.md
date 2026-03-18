@@ -123,6 +123,7 @@ Retries are non-blocking: on a retryable failure, `task_retry_single_webhook` is
 
 **What is NOT retried:**
 - `2xx` — success.
+- `3xx` — redirect. We do not follow POST redirects; the customer should update the endpoint URL.
 - `4xx` (except 429) — client error (wrong URL, auth failure, resource gone). Retrying the same request won't help. Persistent 4xx failures are caught by the auto-disable threshold instead.
 
 **Backoff schedule** (configurable via settings):
@@ -130,9 +131,9 @@ Retries are non-blocking: on a retryable failure, `task_retry_single_webhook` is
 - Attempt 2 → wait 10 s → attempt 3
 - Attempt 3 → wait 100 s → attempt 4
 - Attempt 4 → wait 1000 s → attempt 5
-- …continuing until 30 minutes have elapsed since the first attempt, then abandoned.
+- Stop after 4 retries.
 
-Settings: `webhook_retry_backoff_base_seconds` (60), `webhook_retry_backoff_multiplier` (3.0), `webhook_retry_max_window_seconds` (1800).
+Settings: `webhook_retry_backoff_base_seconds` (1.0), `webhook_retry_backoff_multiplier` (10.0), `webhook_retry_max_attempts` (4).
 
 ### Disable-on-failure
 

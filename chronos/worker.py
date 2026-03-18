@@ -373,18 +373,12 @@ def task_retry_single_webhook(
     endpoint_id: int,
     payload: str,
     url_extension: str | None = None,
-    first_attempt_at: float = 0.0,
     attempt: int = 1,
 ):
     """
-    One-attempt retry for a single endpoint. Re-enqueues itself with backoff if retryable and within 30 min window.
+    One-attempt retry for a single endpoint. Re-enqueues itself with backoff
+    while the failure is retryable and we have retries remaining.
     """
-    first_attempt_at_dt = datetime.fromtimestamp(first_attempt_at, UTC) if first_attempt_at else datetime.now(UTC)
-    elapsed = (datetime.now(UTC) - first_attempt_at_dt).total_seconds()
-    if elapsed >= settings.webhook_retry_max_window_seconds:
-        app_logger.info('Retry for endpoint %s abandoned: past 30 min window', endpoint_id)
-        return
-
     with Session(engine) as db:
         endpoint = db.get(WebhookEndpoint, endpoint_id)
         if not endpoint or not endpoint.active:
@@ -398,27 +392,25 @@ def task_retry_single_webhook(
         db.add(log)
         db.commit()
 
-        should_retry = retryable and elapsed < settings.webhook_retry_max_window_seconds
+        if not _is_success(request_data):
+            _check_and_disable_endpoint_if_needed(db, endpoint)
+            db.commit()
+
+        should_retry = retryable and endpoint.active and attempt < settings.webhook_retry_max_attempts
 
         if should_retry:
-            next_delay = min(
-                settings.webhook_retry_backoff_base_seconds
-                * (settings.webhook_retry_backoff_multiplier ** (attempt - 1)),
-                settings.webhook_retry_max_window_seconds - elapsed,
+            next_delay = settings.webhook_retry_backoff_base_seconds * (
+                settings.webhook_retry_backoff_multiplier ** (attempt - 1)
             )
             next_delay = max(0, int(next_delay))
             task_retry_single_webhook.apply_async(
                 args=[endpoint_id, payload],
-                kwargs={'url_extension': url_extension, 'first_attempt_at': first_attempt_at, 'attempt': attempt + 1},
+                kwargs={'url_extension': url_extension, 'attempt': attempt + 1},
                 countdown=next_delay,
             )
             app_logger.info(
                 'Re-queued retry for endpoint %s in %s s (attempt %s)', endpoint_id, next_delay, attempt + 1
             )
-
-            # Check disable after we've logged this failure
-            _check_and_disable_endpoint_if_needed(db, endpoint)
-            db.commit()
 
 
 @celery_app.task(
@@ -444,7 +436,6 @@ def task_send_webhooks(payload: str, url_extension: str = None):
 
     app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
     lf_span = 'Sending webhooks for branch: {branch_id=}'
-    first_attempt_at = datetime.now(UTC).timestamp()
     with logfire.span(lf_span, branch_id=branch_id):
         with Session(engine) as db:
             # Get all the endpoints for the branch
@@ -464,7 +455,7 @@ def task_send_webhooks(payload: str, url_extension: str = None):
             for endpoint_id, payload_str, url_ext in retry_list:
                 task_retry_single_webhook.apply_async(
                     args=[endpoint_id, payload_str],
-                    kwargs={'url_extension': url_ext, 'first_attempt_at': first_attempt_at, 'attempt': 1},
+                    kwargs={'url_extension': url_ext, 'attempt': 1},
                     countdown=settings.webhook_retry_backoff_base_seconds,
                 )
 
