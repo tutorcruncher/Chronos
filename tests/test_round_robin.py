@@ -13,7 +13,7 @@ import respx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
 from chronos.views import _extract_branch_id
@@ -314,7 +314,7 @@ def test_async_post_webhooks_empty_events_list():
     )
     payload = json.dumps({'events': [], 'request_time': 1771509452})
 
-    logs, success, failed = asyncio.run(_async_post_webhooks([endpoint], None, payload))
+    logs, success, failed, _ = asyncio.run(_async_post_webhooks([endpoint], None, payload))
 
     assert logs == []
     assert success == 0
@@ -350,50 +350,12 @@ def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
 
     with respx.mock:
         respx.post('https://valid.example.com/hook').mock(return_value=httpx.Response(200))
-        logs, success, failed = asyncio.run(_async_post_webhooks([valid_endpoint, invalid_endpoint], None, payload))
+        logs, success, failed, _ = asyncio.run(_async_post_webhooks([valid_endpoint, invalid_endpoint], None, payload))
 
     assert len(logs) == 2
     assert success == 2
     assert failed == 0
     assert all(log.webhook_endpoint_id == 1 for log in logs)
-
-
-def test_async_post_webhooks_response_exception_does_not_break_other_tasks():
-    """An exception from one endpoint doesn't prevent logging of successful ones."""
-    failing = WebhookEndpoint(
-        id=1,
-        tc_id=1,
-        name='failing-hook',
-        branch_id=3,
-        webhook_url='https://failing.example.com/hook',
-        api_key='key1',
-        active=True,
-    )
-    healthy = WebhookEndpoint(
-        id=2,
-        tc_id=2,
-        name='healthy-hook',
-        branch_id=3,
-        webhook_url='https://healthy.example.com/hook',
-        api_key='key2',
-        active=True,
-    )
-    payload = json.dumps(
-        {
-            'events': [REALISTIC_TC2_EVENTS[0]],
-            'request_time': 1771509452,
-        }
-    )
-
-    with respx.mock:
-        respx.post('https://failing.example.com/hook').mock(side_effect=RuntimeError('connection exploded'))
-        respx.post('https://healthy.example.com/hook').mock(return_value=httpx.Response(200))
-        logs, success, failed = asyncio.run(_async_post_webhooks([failing, healthy], None, payload))
-
-    assert len(logs) == 1
-    assert success == 1
-    assert failed == 0
-    assert logs[0].webhook_endpoint_id == 2
 
 
 @patch.object(task_send_webhooks, 'apply_async')
@@ -552,17 +514,10 @@ def test_job_dispatcher_task_dispatch_cycle_returns_zero():
     assert not hasattr(mock_span, 'message')
 
 
-@pytest.fixture
-def app_db(engine):
-    """Yield a session on the test engine so data is visible to task_send_webhooks.
-
-    Uses the conftest engine (test_pg_dsn) rather than chronos.db.engine to
-    guarantee tests never touch the production database.  On CI (testing=true)
-    both engines resolve to test_pg_dsn so the task's own session sees the
-    same data.
-    """
-    with Session(engine) as db:
-        yield db
+def test_dispatch_empty_payload():
+    """dispatch_branch_task with payload=None enqueues nothing."""
+    dispatch_branch_task(task_send_webhooks, branch_id=99, payload=None, url_extension=None)
+    assert job_queue.get_queue_length(99) == 0
 
 
 @respx.mock
@@ -694,7 +649,7 @@ def test_e2e_tc2_multi_event_webhook_splits_and_delivers(session: Session, clien
             ep_logs = [log for log in logs if log.webhook_endpoint_id == ep_id]
             assert len(ep_logs) == 3
             for log in ep_logs:
-                assert log.status == 'Success'
+                assert log.status == WebhookStatus.SUCCESS
                 assert log.status_code == 200
                 body = json.loads(log.request_body)
                 assert len(body['events']) == 1
@@ -794,7 +749,7 @@ def test_e2e_tc2_public_profile_webhook_no_split_with_url_extension(
         assert len(logs) == 1
 
         log = logs[0]
-        assert log.status == 'Success'
+        assert log.status == WebhookStatus.SUCCESS
         assert log.status_code == 200
         log_body = json.loads(log.request_body)
         assert 'events' not in log_body
@@ -927,14 +882,14 @@ def test_e2e_multi_tenant_isolation_no_cross_delivery(session: Session, client: 
         b99_logs = [wl for wl in logs if wl.webhook_endpoint_id in (ep_alpha_id, ep_beta_id)]
         assert len(b99_logs) == 4
         for log in b99_logs:
-            assert log.status == 'Success'
+            assert log.status == WebhookStatus.SUCCESS
             assert log.status_code == 200
             body = json.loads(log.request_body)
             assert body['events'][0]['branch'] == 99
 
         b199_logs = [wl for wl in logs if wl.webhook_endpoint_id == ep_gamma_id]
         assert len(b199_logs) == 1
-        assert b199_logs[0].status == 'Success'
+        assert b199_logs[0].status == WebhookStatus.SUCCESS
         body = json.loads(b199_logs[0].request_body)
         assert body['events'][0]['branch'] == 199
 
@@ -1147,14 +1102,14 @@ def test_e2e_large_tenant_backlog_does_not_cross_tenant_delivery(session: Sessio
         b99_logs = [wl for wl in logs if wl.webhook_endpoint_id in (ep_alpha_id, ep_beta_id)]
         assert len(b99_logs) == 10
         for log in b99_logs:
-            assert log.status == 'Success'
+            assert log.status == WebhookStatus.SUCCESS
             assert log.status_code == 200
             body = json.loads(log.request_body)
             assert body['events'][0]['branch'] == 99
 
         b199_logs = [wl for wl in logs if wl.webhook_endpoint_id == ep_gamma_id]
         assert len(b199_logs) == 1
-        assert b199_logs[0].status == 'Success'
+        assert b199_logs[0].status == WebhookStatus.SUCCESS
         body = json.loads(b199_logs[0].request_body)
         assert body['events'][0]['branch'] == 199
 

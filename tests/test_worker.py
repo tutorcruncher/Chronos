@@ -10,7 +10,7 @@ import respx as respx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.worker import _delete_old_logs_job, task_send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,
@@ -34,6 +34,12 @@ class TestWorkers:
     def db(self, engine, create_tables):
         with Session(engine) as session:
             yield session
+
+    @pytest.fixture(autouse=True)
+    def no_retry_enqueue(self):
+        """Prevent task_retry_single_webhook.apply_async from firing real Celery tasks in these tests."""
+        with patch('chronos.worker.task_retry_single_webhook.apply_async'):
+            yield
 
     @respx.mock
     def test_send_webhook_one(self, db: Session, client: TestClient, celery_session_worker):
@@ -59,7 +65,7 @@ class TestWorkers:
         assert len(webhooks) == 1
 
         webhook = webhooks[0]
-        assert webhook.status == 'Success'
+        assert webhook.status == WebhookStatus.SUCCESS
         assert webhook.status_code == 200
 
     @respx.mock
@@ -185,7 +191,7 @@ class TestWorkers:
         assert mock_request.called
 
         webhook = webhooks[0]
-        assert webhook.status == 'Unexpected response'
+        assert webhook.status == WebhookStatus.UNEXPECTED_RESPONSE
         assert webhook.status_code == 409
 
     @respx.mock
@@ -264,7 +270,7 @@ class TestWorkers:
         assert len(webhooks) == 1
 
         webhook = webhooks[0]
-        assert webhook.status == 'Unexpected response'
+        assert webhook.status == WebhookStatus.NO_RESPONSE
         assert webhook.status_code == 999
         assert webhook.response_body == '{"Message": "No response from endpoint"}'
         assert webhook.response_headers == '{"Message": "No response from endpoint"}'
@@ -307,7 +313,7 @@ class TestWorkers:
         webhooks = db.exec(select(WebhookLog)).all()
         assert len(webhooks) == 3
         for webhook in webhooks:
-            assert webhook.status == 'Success'
+            assert webhook.status == WebhookStatus.SUCCESS
             assert webhook.status_code == 200
 
     @respx.mock

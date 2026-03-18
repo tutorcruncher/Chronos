@@ -1,0 +1,215 @@
+"""End-to-end tests for webhook endpoint disable-on-failure and TC2 notification."""
+
+import json
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
+
+import httpx
+import pytest
+import respx
+from fastapi.testclient import TestClient
+from sqlalchemy import delete
+from sqlmodel import Session, select
+
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.utils import settings
+from chronos.worker import task_retry_single_webhook, task_send_webhooks
+from tests.test_helpers import (
+    create_webhook_log_from_dft_data,
+    get_dft_webhook_data,
+)
+
+# tc_id range used by disable tests; cleaned up after each test so other test files see a clean DB.
+DISABLE_TEST_TC_IDS = range(200, 208)
+
+
+@pytest.fixture(autouse=True)
+def no_retry_enqueue():
+    """Suppress real Celery retry enqueuing so tasks don't fire during other tests."""
+    with patch.object(task_retry_single_webhook, 'apply_async'):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def cleanup_disable_data(app_db: Session):
+    yield
+    ids = app_db.exec(select(WebhookEndpoint.id).where(WebhookEndpoint.tc_id.in_(DISABLE_TEST_TC_IDS))).all()
+    if ids:
+        app_db.exec(delete(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_(ids)))
+        app_db.exec(delete(WebhookEndpoint).where(WebhookEndpoint.id.in_(ids)))
+        app_db.commit()
+
+
+# Use branch_id 199 so disable tests don't share branch 99 with retry tests (avoids cross-test disables).
+def _create_endpoint(app_db: Session, branch_id: int = 199, active: bool = True, **kwargs) -> WebhookEndpoint:
+    ep = WebhookEndpoint(
+        tc_id=kwargs.get('tc_id', 200),
+        name=kwargs.get('name', 'disable-test'),
+        branch_id=branch_id,
+        webhook_url=kwargs.get('webhook_url', 'https://disable-test.example.com/hook'),
+        api_key=kwargs.get('api_key', 'secret'),
+        active=active,
+    )
+    app_db.add(ep)
+    app_db.commit()
+    app_db.refresh(ep)
+    return ep
+
+
+def _add_logs(app_db: Session, endpoint_id: int, count: int, failure_count: int, minutes_ago: int = 0):
+    """Add count logs, failure_count of them with status != Success, with timestamp in window."""
+    base_ts = datetime.now(UTC) - timedelta(minutes=minutes_ago or 1)
+    for _ in range(failure_count):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=endpoint_id,
+                status=WebhookStatus.UNEXPECTED_RESPONSE,
+                status_code=500,
+                timestamp=base_ts,
+            )
+        )
+    for _ in range(count - failure_count):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=endpoint_id,
+                status=WebhookStatus.SUCCESS,
+                status_code=200,
+                timestamp=base_ts,
+            )
+        )
+    app_db.commit()
+
+
+@respx.mock
+def test_disable_after_repeated_failures(client: TestClient, app_db: Session):
+    """Repeated failures exceed threshold -> endpoint disabled and TC2 notified."""
+    ep = _create_endpoint(app_db, tc_id=200)
+    # 10 logs, 3 failures = 30% > 20%, so disable triggers
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+
+    notify_url = 'https://tc2.example.com/endpoint-disabled'
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+    assert mock_notify.called
+    body = json.loads(mock_notify.calls[0].request.content)
+    assert body['tc_id'] == 200
+    assert body['branch_id'] == 199
+    assert body['failure_count'] == 4  # 3 + 1 from this send
+    assert body['reason'] == 'too_many_failures'
+
+
+@respx.mock
+def test_disable_not_triggered_below_min_attempts(client: TestClient, app_db: Session):
+    """Below min_attempts (10) -> endpoint stays active."""
+    ep = _create_endpoint(app_db, tc_id=201)
+    _add_logs(app_db, ep.id, count=3, failure_count=3)  # only 3 attempts
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+
+    with patch.object(settings, 'tc2_endpoint_disabled_url', 'https://tc2.example.com/disabled'):
+        mock_notify = respx.post('https://tc2.example.com/disabled')
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is True
+    assert not mock_notify.called
+
+
+@respx.mock
+def test_disable_not_triggered_below_threshold(client: TestClient, app_db: Session):
+    """10 logs with 1 failure (10%); one more failure -> 2/11 < 20%, stays active."""
+    ep = _create_endpoint(app_db, tc_id=202)
+    _add_logs(app_db, ep.id, count=10, failure_count=1)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+
+    with patch.object(settings, 'tc2_endpoint_disabled_url', 'https://tc2.example.com/disabled'):
+        mock_notify = respx.post('https://tc2.example.com/disabled')
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is True
+    assert not mock_notify.called
+
+
+@respx.mock
+def test_notify_url_not_set(client: TestClient, app_db: Session):
+    """tc2_endpoint_disabled_url=None -> endpoint still disabled, no POST to TC2 notify."""
+    ep = _create_endpoint(app_db, tc_id=203)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2-notify.example.com/disabled'
+    mock_notify = respx.post(notify_url)
+
+    with patch.object(settings, 'tc2_endpoint_disabled_url', None):
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+    assert not mock_notify.called  # no notify when URL is None
+
+
+@respx.mock
+def test_notify_tc2_returns_error(client: TestClient, app_db: Session):
+    """TC2 notify returns 400 -> warning logged, no exception, task completes."""
+    ep = _create_endpoint(app_db, tc_id=204)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2.example.com/disabled'
+    respx.post(notify_url).mock(return_value=httpx.Response(400, text='Bad request'))
+
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+
+
+@respx.mock
+def test_notify_tc2_unreachable(client: TestClient, app_db: Session):
+    """TC2 notify raises -> exception logged, task completes."""
+    ep = _create_endpoint(app_db, tc_id=205)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2.example.com/disabled'
+    respx.post(notify_url).mock(side_effect=httpx.ConnectError('connection failed'))
+
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+
+
+@respx.mock
+def test_disable_already_inactive_endpoint_skipped(client: TestClient, app_db: Session):
+    """Endpoint already inactive when threshold check runs -> TC2 is NOT notified a second time."""
+    ep = _create_endpoint(app_db, tc_id=206, active=False)
+    _add_logs(app_db, ep.id, count=10, failure_count=4)
+    notify_url = 'https://tc2.example.com/disabled'
+    mock_notify = respx.post(notify_url)
+
+    from sqlmodel import Session as DbSession
+
+    from chronos.db import engine
+    from chronos.worker import _check_and_disable_endpoint_if_needed
+
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        with DbSession(engine) as db:
+            ep_in_session = db.get(WebhookEndpoint, ep.id)
+            _check_and_disable_endpoint_if_needed(db, ep_in_session)
+            db.commit()
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False  # still inactive, unchanged
+    assert not mock_notify.called  # no duplicate notification
