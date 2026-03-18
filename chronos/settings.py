@@ -50,5 +50,16 @@ class Settings(BaseSettings):
     webhook_http_timeout_seconds: float = 8.0
     webhook_http_max_connections: int = 250
 
+    # Webhook retry (non-blocking: enqueue to Celery with countdown)
+    webhook_retry_backoff_base_seconds: float = 60.0
+    webhook_retry_backoff_multiplier: float = 3.0
+    webhook_retry_max_window_seconds: int = 30 * 60  # 30 minutes from first attempt
+
+    # Disable endpoint when failure rate exceeds threshold in a time window
+    webhook_disable_failure_rate_threshold: float = 0.20  # 20%
+    webhook_disable_min_attempts: int = 10
+    webhook_disable_failure_window_minutes: int = 60
+    tc2_endpoint_disabled_url: Optional[str] = None  # POST here when endpoint auto-disabled
+
     # Read local env file for local variables
     model_config = SettingsConfigDict(env_file='.env', extra='allow')

@@ -314,7 +314,7 @@ def test_async_post_webhooks_empty_events_list():
     )
     payload = json.dumps({'events': [], 'request_time': 1771509452})
 
-    logs, success, failed = asyncio.run(_async_post_webhooks([endpoint], None, payload))
+    logs, success, failed, _ = asyncio.run(_async_post_webhooks([endpoint], None, payload))
 
     assert logs == []
     assert success == 0
@@ -350,7 +350,7 @@ def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
 
     with respx.mock:
         respx.post('https://valid.example.com/hook').mock(return_value=httpx.Response(200))
-        logs, success, failed = asyncio.run(_async_post_webhooks([valid_endpoint, invalid_endpoint], None, payload))
+        logs, success, failed, _ = asyncio.run(_async_post_webhooks([valid_endpoint, invalid_endpoint], None, payload))
 
     assert len(logs) == 2
     assert success == 2
@@ -388,12 +388,14 @@ def test_async_post_webhooks_response_exception_does_not_break_other_tasks():
     with respx.mock:
         respx.post('https://failing.example.com/hook').mock(side_effect=RuntimeError('connection exploded'))
         respx.post('https://healthy.example.com/hook').mock(return_value=httpx.Response(200))
-        logs, success, failed = asyncio.run(_async_post_webhooks([failing, healthy], None, payload))
+        logs, success, failed, _ = asyncio.run(_async_post_webhooks([failing, healthy], None, payload))
 
-    assert len(logs) == 1
+    # Both attempts are now logged: one failure (exception), one success
+    assert len(logs) == 2
     assert success == 1
-    assert failed == 0
-    assert logs[0].webhook_endpoint_id == 2
+    assert failed == 1
+    success_log = next(log for log in logs if log.webhook_endpoint_id == 2)
+    assert success_log.status == 'Success'
 
 
 @patch.object(task_send_webhooks, 'apply_async')
@@ -552,17 +554,10 @@ def test_job_dispatcher_task_dispatch_cycle_returns_zero():
     assert not hasattr(mock_span, 'message')
 
 
-@pytest.fixture
-def app_db(engine):
-    """Yield a session on the test engine so data is visible to task_send_webhooks.
-
-    Uses the conftest engine (test_pg_dsn) rather than chronos.db.engine to
-    guarantee tests never touch the production database.  On CI (testing=true)
-    both engines resolve to test_pg_dsn so the task's own session sees the
-    same data.
-    """
-    with Session(engine) as db:
-        yield db
+def test_dispatch_empty_payload():
+    """dispatch_branch_task with payload=None enqueues nothing."""
+    dispatch_branch_task(task_send_webhooks, branch_id=99, payload=None, url_extension=None)
+    assert job_queue.get_queue_length(99) == 0
 
 
 @respx.mock

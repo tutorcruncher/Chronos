@@ -264,7 +264,7 @@ class TestWorkers:
         assert len(webhooks) == 1
 
         webhook = webhooks[0]
-        assert webhook.status == 'Unexpected response'
+        assert webhook.status == 'No response'
         assert webhook.status_code == 999
         assert webhook.response_body == '{"Message": "No response from endpoint"}'
         assert webhook.response_headers == '{"Message": "No response from endpoint"}'
