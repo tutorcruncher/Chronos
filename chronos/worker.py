@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 
 from chronos.db import engine
 from chronos.pydantic_schema import RequestData
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.queue import JobQueue
 from chronos.utils import app_logger, settings
 
@@ -156,6 +156,8 @@ def _is_retryable(response: RequestData) -> bool:
 
     Not retried:
     - 2xx: success.
+    - 3xx: redirect — httpx does not follow redirects on POST; the endpoint URL has
+      moved and the customer needs to update it.
     - 4xx (except 429): client error — the endpoint URL is wrong, auth failed, or the
       resource doesn't exist. Retrying with the same request won't help. Persistent 4xx
       failures will eventually trigger the auto-disable threshold instead.
@@ -171,13 +173,13 @@ def _is_retryable(response: RequestData) -> bool:
     return False
 
 
-def _get_webhook_status(response: RequestData) -> str:
+def _get_webhook_status(response: RequestData) -> WebhookStatus:
     """Human-readable delivery status string written to WebhookLog."""
     if _is_success(response):
-        return 'Success'
+        return WebhookStatus.SUCCESS
     if not response.successful_response:
-        return 'No response'
-    return 'Unexpected response'
+        return WebhookStatus.NO_RESPONSE
+    return WebhookStatus.UNEXPECTED_RESPONSE
 
 
 def _request_data_to_log(response: RequestData) -> WebhookLog:
@@ -245,10 +247,10 @@ def _process_response(request_data: RequestData) -> tuple[WebhookLog, bool]:
 async def _async_post_webhooks(endpoints, url_extension, payload):
     """Fan out a payload to all endpoints concurrently and return delivery results.
 
-    Splits multi-event payloads into one request per event (for Zapier compatibility),
-    signs each request, and fires them all via asyncio.gather. Returns
-    (webhook_logs, total_success, total_failed, retry_list) where retry_list is a list
-    of (endpoint_id, payload_str, url_extension) tuples for retryable failures.
+    Each multi-event payload is split into one request per event before sending
+    (see `_split_payloads`). Returns (webhook_logs, total_success, total_failed,
+    retry_list) where retry_list is a list of (endpoint_id, payload_str,
+    url_extension) tuples for retryable failures.
     """
     webhook_logs = []
     total_success, total_failed = 0, 0
@@ -306,13 +308,9 @@ def _notify_endpoint_disabled(
         'window_minutes': window_minutes,
         'reason': 'too_many_failures',
     }
+    headers = {'Authorization': f'Bearer {settings.tc2_shared_key}', 'Content-Type': 'application/json'}
     try:
-        r = httpx.post(
-            url,
-            json=payload,
-            headers={'Authorization': f'Bearer {settings.tc2_shared_key}', 'Content-Type': 'application/json'},
-            timeout=10.0,
-        )
+        r = httpx.post(url, json=payload, headers=headers, timeout=10.0)
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
         app_logger.warning('TC2 endpoint-disabled callback returned %s: %s', e.response.status_code, e.response.text)
@@ -320,46 +318,37 @@ def _notify_endpoint_disabled(
         app_logger.exception('Failed to notify TC2 of disabled endpoint: %s', e)
 
 
-def _check_and_disable_endpoint_if_needed(db: Session, endpoint_id: int) -> None:
+def _check_and_disable_endpoint_if_needed(db: Session, endpoint: WebhookEndpoint) -> None:
     """If endpoint has >threshold failure rate in the window with min attempts, set active=False and notify TC2."""
+    if not endpoint.active:
+        return
     window_start = datetime.now(UTC) - timedelta(minutes=settings.webhook_disable_failure_window_minutes)
     # Count total and failures in window
-    total_row = db.exec(
+    total = db.exec(
+        select(func.count())
+        .select_from(WebhookLog)
+        .where(WebhookLog.webhook_endpoint_id == endpoint.id, WebhookLog.timestamp >= window_start)
+    ).one()
+    failures = db.exec(
         select(func.count())
         .select_from(WebhookLog)
         .where(
-            WebhookLog.webhook_endpoint_id == endpoint_id,
+            WebhookLog.webhook_endpoint_id == endpoint.id,
             WebhookLog.timestamp >= window_start,
+            WebhookLog.status != WebhookStatus.SUCCESS,
         )
     ).one()
-    failures_row = db.exec(
-        select(func.count())
-        .select_from(WebhookLog)
-        .where(
-            WebhookLog.webhook_endpoint_id == endpoint_id,
-            WebhookLog.timestamp >= window_start,
-            WebhookLog.status != 'Success',
-        )
-    ).one()
-    total = total_row[0] if hasattr(total_row, '__getitem__') else total_row
-    failures = failures_row[0] if hasattr(failures_row, '__getitem__') else failures_row
     if total < settings.webhook_disable_min_attempts:
         return
-    if total == 0:
-        return
-    rate = failures / total
-    if rate <= settings.webhook_disable_failure_rate_threshold:
-        return
-    endpoint = db.get(WebhookEndpoint, endpoint_id)
-    if not endpoint or not endpoint.active:
+    failure_rate = failures / total
+    if failure_rate <= settings.webhook_disable_failure_rate_threshold:
         return
     endpoint.active = False
-    db.add(endpoint)
-    app_logger.warning(
+    app_logger.info(
         'Auto-disabled endpoint %s (tc_id=%s): failure rate %.1f%% (%s/%s) in last %s minutes',
         endpoint.name,
         endpoint.tc_id,
-        rate * 100,
+        failure_rate * 100,
         failures,
         total,
         settings.webhook_disable_failure_window_minutes,
@@ -384,14 +373,14 @@ def task_retry_single_webhook(
     endpoint_id: int,
     payload: str,
     url_extension: str | None = None,
-    first_attempt_at_iso: str = '',
+    first_attempt_at: float = 0.0,
     attempt: int = 1,
 ):
     """
     One-attempt retry for a single endpoint. Re-enqueues itself with backoff if retryable and within 30 min window.
     """
-    first_attempt_at = datetime.fromisoformat(first_attempt_at_iso) if first_attempt_at_iso else datetime.now(UTC)
-    elapsed = (datetime.now(UTC) - first_attempt_at).total_seconds()
+    first_attempt_at_dt = datetime.fromtimestamp(first_attempt_at, UTC) if first_attempt_at else datetime.now(UTC)
+    elapsed = (datetime.now(UTC) - first_attempt_at_dt).total_seconds()
     if elapsed >= settings.webhook_retry_max_window_seconds:
         app_logger.info('Retry for endpoint %s abandoned: past 30 min window', endpoint_id)
         return
@@ -400,9 +389,8 @@ def task_retry_single_webhook(
         endpoint = db.get(WebhookEndpoint, endpoint_id)
         if not endpoint or not endpoint.active:
             return
-        payload_to_send = json.loads(payload) if isinstance(payload, str) else payload
 
-        request_data = _send_single_webhook_sync(endpoint, payload_to_send, url_extension)
+        request_data = _send_single_webhook_sync(endpoint, json.loads(payload), url_extension)
         if request_data is None:
             return
 
@@ -410,31 +398,27 @@ def task_retry_single_webhook(
         db.add(log)
         db.commit()
 
-        if _is_success(request_data):
-            return
+        should_retry = retryable and elapsed < settings.webhook_retry_max_window_seconds
 
-        if not retryable or elapsed >= settings.webhook_retry_max_window_seconds:
-            return
+        if should_retry:
+            next_delay = min(
+                settings.webhook_retry_backoff_base_seconds
+                * (settings.webhook_retry_backoff_multiplier ** (attempt - 1)),
+                settings.webhook_retry_max_window_seconds - elapsed,
+            )
+            next_delay = max(0, int(next_delay))
+            task_retry_single_webhook.apply_async(
+                args=[endpoint_id, payload],
+                kwargs={'url_extension': url_extension, 'first_attempt_at': first_attempt_at, 'attempt': attempt + 1},
+                countdown=next_delay,
+            )
+            app_logger.info(
+                'Re-queued retry for endpoint %s in %s s (attempt %s)', endpoint_id, next_delay, attempt + 1
+            )
 
-        next_delay = min(
-            settings.webhook_retry_backoff_base_seconds * (settings.webhook_retry_backoff_multiplier ** (attempt - 1)),
-            settings.webhook_retry_max_window_seconds - elapsed,
-        )
-        next_delay = max(0, int(next_delay))
-        task_retry_single_webhook.apply_async(
-            args=[endpoint_id, payload],
-            kwargs={
-                'url_extension': url_extension,
-                'first_attempt_at_iso': first_attempt_at_iso,
-                'attempt': attempt + 1,
-            },
-            countdown=next_delay,
-        )
-        app_logger.info('Re-queued retry for endpoint %s in %s s (attempt %s)', endpoint_id, next_delay, attempt + 1)
-
-        # Check disable after we've logged this failure
-        _check_and_disable_endpoint_if_needed(db, endpoint_id)
-        db.commit()
+            # Check disable after we've logged this failure
+            _check_and_disable_endpoint_if_needed(db, endpoint)
+            db.commit()
 
 
 @celery_app.task(
@@ -442,10 +426,7 @@ def task_retry_single_webhook(
     retry_kwargs={'max_retries': 3},
     retry_backoff=True,
 )
-def task_send_webhooks(
-    payload: str,
-    url_extension: str = None,
-):
+def task_send_webhooks(payload: str, url_extension: str = None):
     """
     Send the webhook to the relevant endpoints
     """
@@ -463,8 +444,7 @@ def task_send_webhooks(
 
     app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
     lf_span = 'Sending webhooks for branch: {branch_id=}'
-    first_attempt_at = datetime.now(UTC)
-    first_attempt_at_iso = first_attempt_at.isoformat()
+    first_attempt_at = datetime.now(UTC).timestamp()
     with logfire.span(lf_span, branch_id=branch_id):
         with Session(engine) as db:
             # Get all the endpoints for the branch
@@ -484,14 +464,17 @@ def task_send_webhooks(
             for endpoint_id, payload_str, url_ext in retry_list:
                 task_retry_single_webhook.apply_async(
                     args=[endpoint_id, payload_str],
-                    kwargs={'url_extension': url_ext, 'first_attempt_at_iso': first_attempt_at_iso, 'attempt': 1},
+                    kwargs={'url_extension': url_ext, 'first_attempt_at': first_attempt_at, 'attempt': 1},
                     countdown=settings.webhook_retry_backoff_base_seconds,
                 )
 
             # Disable endpoints that exceed failure rate threshold
-            endpoint_ids_with_failures = {log.webhook_endpoint_id for log in webhook_logs if log.status != 'Success'}
-            for endpoint_id in endpoint_ids_with_failures:
-                _check_and_disable_endpoint_if_needed(db, endpoint_id)
+            endpoint_ids_with_failures = {
+                log.webhook_endpoint_id for log in webhook_logs if log.status != WebhookStatus.SUCCESS
+            }
+            for endpoint in endpoints:
+                if endpoint.id in endpoint_ids_with_failures:
+                    _check_and_disable_endpoint_if_needed(db, endpoint)
             db.commit()
     app_logger.info(
         '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
@@ -531,12 +514,9 @@ def get_count(date_to_delete_before: datetime) -> int:
     Get the count of all logs
     """
     with Session(engine) as db:
-        count = (
-            db.query(WebhookLog)
-            .with_entities(func.count())
-            .where(WebhookLog.timestamp < date_to_delete_before)
-            .scalar()
-        )
+        count = db.exec(
+            select(func.count()).select_from(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before)
+        ).one()
     return count
 
 

@@ -13,7 +13,7 @@ import respx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
 from chronos.views import _extract_branch_id
@@ -649,7 +649,7 @@ def test_e2e_tc2_multi_event_webhook_splits_and_delivers(session: Session, clien
             ep_logs = [log for log in logs if log.webhook_endpoint_id == ep_id]
             assert len(ep_logs) == 3
             for log in ep_logs:
-                assert log.status == 'Success'
+                assert log.status == WebhookStatus.SUCCESS
                 assert log.status_code == 200
                 body = json.loads(log.request_body)
                 assert len(body['events']) == 1
@@ -749,7 +749,7 @@ def test_e2e_tc2_public_profile_webhook_no_split_with_url_extension(
         assert len(logs) == 1
 
         log = logs[0]
-        assert log.status == 'Success'
+        assert log.status == WebhookStatus.SUCCESS
         assert log.status_code == 200
         log_body = json.loads(log.request_body)
         assert 'events' not in log_body
@@ -882,14 +882,14 @@ def test_e2e_multi_tenant_isolation_no_cross_delivery(session: Session, client: 
         b99_logs = [wl for wl in logs if wl.webhook_endpoint_id in (ep_alpha_id, ep_beta_id)]
         assert len(b99_logs) == 4
         for log in b99_logs:
-            assert log.status == 'Success'
+            assert log.status == WebhookStatus.SUCCESS
             assert log.status_code == 200
             body = json.loads(log.request_body)
             assert body['events'][0]['branch'] == 99
 
         b199_logs = [wl for wl in logs if wl.webhook_endpoint_id == ep_gamma_id]
         assert len(b199_logs) == 1
-        assert b199_logs[0].status == 'Success'
+        assert b199_logs[0].status == WebhookStatus.SUCCESS
         body = json.loads(b199_logs[0].request_body)
         assert body['events'][0]['branch'] == 199
 
@@ -1102,14 +1102,14 @@ def test_e2e_large_tenant_backlog_does_not_cross_tenant_delivery(session: Sessio
         b99_logs = [wl for wl in logs if wl.webhook_endpoint_id in (ep_alpha_id, ep_beta_id)]
         assert len(b99_logs) == 10
         for log in b99_logs:
-            assert log.status == 'Success'
+            assert log.status == WebhookStatus.SUCCESS
             assert log.status_code == 200
             body = json.loads(log.request_body)
             assert body['events'][0]['branch'] == 99
 
         b199_logs = [wl for wl in logs if wl.webhook_endpoint_id == ep_gamma_id]
         assert len(b199_logs) == 1
-        assert b199_logs[0].status == 'Success'
+        assert b199_logs[0].status == WebhookStatus.SUCCESS
         body = json.loads(b199_logs[0].request_body)
         assert body['events'][0]['branch'] == 199
 

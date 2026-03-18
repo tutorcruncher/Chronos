@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     webhook_http_max_connections: int = 250
 
     # Webhook retry (non-blocking: enqueue to Celery with countdown)
-    webhook_retry_backoff_base_seconds: float = 60.0
-    webhook_retry_backoff_multiplier: float = 3.0
+    webhook_retry_backoff_base_seconds: float = 1.0
+    webhook_retry_backoff_multiplier: float = 10.0
     webhook_retry_max_window_seconds: int = 30 * 60  # 30 minutes from first attempt
 
     # Disable endpoint when failure rate exceeds threshold in a time window

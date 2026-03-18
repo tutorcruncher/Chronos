@@ -11,9 +11,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.utils import settings
-from chronos.worker import task_send_webhooks
+from chronos.worker import task_retry_single_webhook, task_send_webhooks
 from tests.test_helpers import (
     create_webhook_log_from_dft_data,
     get_dft_webhook_data,
@@ -24,10 +24,16 @@ DISABLE_TEST_TC_IDS = range(200, 208)
 
 
 @pytest.fixture(autouse=True)
+def no_retry_enqueue():
+    """Suppress real Celery retry enqueuing so tasks don't fire during other tests."""
+    with patch.object(task_retry_single_webhook, 'apply_async'):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def cleanup_disable_data(app_db: Session):
     yield
-    rows = app_db.exec(select(WebhookEndpoint.id).where(WebhookEndpoint.tc_id.in_(DISABLE_TEST_TC_IDS))).all()
-    ids = [r[0] if hasattr(r, '__getitem__') else r for r in rows]
+    ids = app_db.exec(select(WebhookEndpoint.id).where(WebhookEndpoint.tc_id.in_(DISABLE_TEST_TC_IDS))).all()
     if ids:
         app_db.exec(delete(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_(ids)))
         app_db.exec(delete(WebhookEndpoint).where(WebhookEndpoint.id.in_(ids)))
@@ -53,15 +59,24 @@ def _create_endpoint(app_db: Session, branch_id: int = 199, active: bool = True,
 def _add_logs(app_db: Session, endpoint_id: int, count: int, failure_count: int, minutes_ago: int = 0):
     """Add count logs, failure_count of them with status != Success, with timestamp in window."""
     base_ts = datetime.now(UTC) - timedelta(minutes=minutes_ago or 1)
-    for i in range(count):
-        is_failure = i < failure_count
-        log = create_webhook_log_from_dft_data(
-            webhook_endpoint_id=endpoint_id,
-            status='Unexpected response' if is_failure else 'Success',
-            status_code=500 if is_failure else 200,
-            timestamp=base_ts,
+    for _ in range(failure_count):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=endpoint_id,
+                status=WebhookStatus.UNEXPECTED_RESPONSE,
+                status_code=500,
+                timestamp=base_ts,
+            )
         )
-        app_db.add(log)
+    for _ in range(count - failure_count):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=endpoint_id,
+                status=WebhookStatus.SUCCESS,
+                status_code=200,
+                timestamp=base_ts,
+            )
+        )
     app_db.commit()
 
 
@@ -190,7 +205,8 @@ def test_disable_already_inactive_endpoint_skipped(client: TestClient, app_db: S
 
     with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
         with DbSession(engine) as db:
-            _check_and_disable_endpoint_if_needed(db, ep.id)
+            ep_in_session = db.get(WebhookEndpoint, ep.id)
+            _check_and_disable_endpoint_if_needed(db, ep_in_session)
             db.commit()
 
     app_db.expire_all()

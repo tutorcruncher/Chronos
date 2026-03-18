@@ -12,7 +12,7 @@ from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from chronos.pydantic_schema import RequestData
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.utils import settings
 from chronos.worker import job_queue, task_retry_single_webhook, task_send_webhooks
@@ -25,8 +25,7 @@ RETRY_TEST_TC_IDS = range(100, 112)
 @pytest.fixture(autouse=True)
 def cleanup_retry_data(app_db: Session):
     yield
-    rows = app_db.exec(select(WebhookEndpoint.id).where(WebhookEndpoint.tc_id.in_(RETRY_TEST_TC_IDS))).all()
-    ids = [r[0] if hasattr(r, '__getitem__') else r for r in rows]
+    ids = app_db.exec(select(WebhookEndpoint.id).where(WebhookEndpoint.tc_id.in_(RETRY_TEST_TC_IDS))).all()
     if ids:
         app_db.exec(delete(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_(ids)))
         app_db.exec(delete(WebhookEndpoint).where(WebhookEndpoint.id.in_(ids)))
@@ -72,29 +71,29 @@ def test_retry_on_503_then_succeeds(client: TestClient, app_db: Session):
     assert mock_retry_apply.called
     call_kw = mock_retry_apply.call_args.kwargs
     assert call_kw['kwargs']['attempt'] == 1
-    assert call_kw['kwargs']['first_attempt_at_iso']
+    assert call_kw['kwargs']['first_attempt_at']
 
     app_db.expire_all()
     logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
     assert len(logs) == 1
-    assert logs[0].status != 'Success'
+    assert logs[0].status != WebhookStatus.SUCCESS
 
     # Run retry with downstream now returning 200
     respx.post(ep.webhook_url).mock(return_value=httpx.Response(200))
     endpoint_id = ep.id
-    payload_str = call_kw['args'][1] if len(call_kw['args']) >= 2 else call_kw['kwargs'].get('payload')
+    payload_str = call_kw['args'][1]
     task_retry_single_webhook(
         endpoint_id,
         payload_str,
         url_extension=call_kw['kwargs'].get('url_extension'),
-        first_attempt_at_iso=call_kw['kwargs']['first_attempt_at_iso'],
+        first_attempt_at=call_kw['kwargs']['first_attempt_at'],
         attempt=call_kw['kwargs']['attempt'],
     )
 
     app_db.expire_all()
     logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
     assert len(logs) == 2
-    assert logs[1].status == 'Success'
+    assert logs[1].status == WebhookStatus.SUCCESS
     assert logs[1].status_code == 200
 
 
@@ -123,7 +122,7 @@ def test_retry_on_timeout(client: TestClient, app_db: Session):
     app_db.expire_all()
     logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
     assert len(logs) == 1
-    assert logs[0].status == 'No response'
+    assert logs[0].status == WebhookStatus.NO_RESPONSE
     assert mock_retry.called
 
 
@@ -140,7 +139,7 @@ def test_no_retry_on_400(client: TestClient, app_db: Session):
     app_db.expire_all()
     logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
     assert len(logs) == 1
-    assert logs[0].status == 'Unexpected response'
+    assert logs[0].status == WebhookStatus.UNEXPECTED_RESPONSE
     assert logs[0].status_code == 400
     assert not mock_retry.called
 
@@ -148,7 +147,7 @@ def test_no_retry_on_400(client: TestClient, app_db: Session):
 def test_retry_abandoned_past_window(app_db: Session):
     """Retry task with first_attempt_at 31 min ago -> no HTTP, no log, no re-enqueue."""
     ep = _create_endpoint(app_db, tc_id=104)
-    first_attempt = (datetime.now(UTC) - timedelta(minutes=31)).isoformat()
+    first_attempt = (datetime.now(UTC) - timedelta(minutes=31)).timestamp()
     payload_str = json.dumps(get_dft_webhook_data())
 
     with patch('chronos.worker._send_single_webhook_sync') as mock_send:
@@ -156,7 +155,7 @@ def test_retry_abandoned_past_window(app_db: Session):
             ep.id,
             payload_str,
             url_extension=None,
-            first_attempt_at_iso=first_attempt,
+            first_attempt_at=first_attempt,
             attempt=1,
         )
     assert not mock_send.called
@@ -171,13 +170,13 @@ def test_retry_skips_inactive_endpoint(app_db: Session):
     ep = _create_endpoint(app_db, tc_id=105, active=False)
     respx.post(ep.webhook_url).mock(return_value=httpx.Response(200))
     payload_str = json.dumps(get_dft_webhook_data())
-    first_attempt = datetime.now(UTC).isoformat()
+    first_attempt = datetime.now(UTC).timestamp()
 
     task_retry_single_webhook(
         ep.id,
         payload_str,
         url_extension=None,
-        first_attempt_at_iso=first_attempt,
+        first_attempt_at=first_attempt,
         attempt=1,
     )
 
@@ -190,8 +189,8 @@ def test_retry_skips_inactive_endpoint(app_db: Session):
 def test_retry_skips_missing_endpoint(app_db: Session):
     """Non-existent endpoint_id -> no error, no log."""
     payload_str = json.dumps(get_dft_webhook_data())
-    first_attempt = datetime.now(UTC).isoformat()
-    task_retry_single_webhook(999999, payload_str, first_attempt_at_iso=first_attempt, attempt=1)
+    first_attempt = datetime.now(UTC).timestamp()
+    task_retry_single_webhook(999999, payload_str, first_attempt_at=first_attempt, attempt=1)
     app_db.expire_all()
     logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == 999999)).all()
     assert len(logs) == 0
@@ -213,8 +212,8 @@ def test_mixed_success_fail_across_endpoints(client: TestClient, app_db: Session
     logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_([ep1.id, ep2.id]))).all()
     assert len(logs) == 2
     statuses = {log.webhook_endpoint_id: log.status for log in logs}
-    assert statuses[ep1.id] == 'Success'
-    assert statuses[ep2.id] != 'Success'
+    assert statuses[ep1.id] == WebhookStatus.SUCCESS
+    assert statuses[ep2.id] != WebhookStatus.SUCCESS
     # Retry enqueued only for the failing endpoint (ep2)
     ep2_retry_calls = [c for c in mock_retry.call_args_list if c.kwargs.get('args') and c.kwargs['args'][0] == ep2.id]
     assert len(ep2_retry_calls) == 1
@@ -238,25 +237,25 @@ def test_retry_task_reenqueues_on_503(app_db: Session):
     ep = _create_endpoint(app_db, tc_id=109)
     respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
     payload_str = json.dumps(get_dft_webhook_data())
-    first_attempt = datetime.now(UTC).isoformat()
+    first_attempt = datetime.now(UTC).timestamp()
 
     with patch.object(task_retry_single_webhook, 'apply_async') as mock_apply:
         task_retry_single_webhook(
             ep.id,
             payload_str,
             url_extension=None,
-            first_attempt_at_iso=first_attempt,
+            first_attempt_at=first_attempt,
             attempt=1,
         )
 
     assert mock_apply.called
     call_kw = mock_apply.call_args.kwargs
     assert call_kw['kwargs']['attempt'] == 2
-    assert call_kw['kwargs']['first_attempt_at_iso'] == first_attempt
+    assert call_kw['kwargs']['first_attempt_at'] == first_attempt
     app_db.expire_all()
     logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
     assert len(logs) == 1
-    assert logs[0].status != 'Success'
+    assert logs[0].status != WebhookStatus.SUCCESS
 
 
 @respx.mock
@@ -264,13 +263,13 @@ def test_retry_task_invalid_url_returns_early(app_db: Session):
     """task_retry_single_webhook with an endpoint whose URL has an invalid scheme returns without a log."""
     ep = _create_endpoint(app_db, tc_id=110, webhook_url='mailto:bad@example.com')
     payload_str = json.dumps(get_dft_webhook_data())
-    first_attempt = datetime.now(UTC).isoformat()
+    first_attempt = datetime.now(UTC).timestamp()
 
     task_retry_single_webhook(
         ep.id,
         payload_str,
         url_extension=None,
-        first_attempt_at_iso=first_attempt,
+        first_attempt_at=first_attempt,
         attempt=1,
     )
 
@@ -285,14 +284,14 @@ def test_retry_task_nonretryable_400_no_reenqueue(app_db: Session):
     ep = _create_endpoint(app_db, tc_id=111)
     respx.post(ep.webhook_url).mock(return_value=httpx.Response(400))
     payload_str = json.dumps(get_dft_webhook_data())
-    first_attempt = datetime.now(UTC).isoformat()
+    first_attempt = datetime.now(UTC).timestamp()
 
     with patch.object(task_retry_single_webhook, 'apply_async') as mock_apply:
         task_retry_single_webhook(
             ep.id,
             payload_str,
             url_extension=None,
-            first_attempt_at_iso=first_attempt,
+            first_attempt_at=first_attempt,
             attempt=1,
         )
 
@@ -300,7 +299,7 @@ def test_retry_task_nonretryable_400_no_reenqueue(app_db: Session):
     app_db.expire_all()
     logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
     assert len(logs) == 1
-    assert logs[0].status == 'Unexpected response'
+    assert logs[0].status == WebhookStatus.UNEXPECTED_RESPONSE
 
 
 @respx.mock
