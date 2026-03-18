@@ -230,21 +230,19 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     loaded_payload = json.loads(payload)
 
     async with AsyncClient(limits=limits) as client:
-        tasks = []
-        for endpoint in endpoints:
-            for payload_to_send in _split_payloads(loaded_payload):
-                request_body_str = json.dumps(payload_to_send)
-                task = asyncio.ensure_future(_send_single_webhook(client, endpoint, payload_to_send, url_extension))
-                tasks.append((task, endpoint.id, request_body_str))
-        webhook_responses = await asyncio.gather(*(task for task, _, _ in tasks), return_exceptions=True)
-        for response, (_, endpoint_id, request_body_str) in zip(webhook_responses, tasks):
+        coros = [
+            _send_single_webhook(client, endpoint, payload_to_send, url_extension)
+            for endpoint in endpoints
+            for payload_to_send in _split_payloads(loaded_payload)
+        ]
+        webhook_responses = await asyncio.gather(*coros, return_exceptions=True)
+        for response in webhook_responses:
             if response is None:
                 continue
 
             if not isinstance(response, RequestData):
-                app_logger.info('No response from endpoint %s. %s', endpoint_id, response)
+                app_logger.info('Unexpected error sending webhook: %s', response)
                 total_failed += 1
-                retry_list.append((endpoint_id, request_body_str, url_extension))
                 continue
 
             log, retryable = _process_response(response)

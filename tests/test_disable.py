@@ -197,24 +197,3 @@ def test_disable_already_inactive_endpoint_skipped(client: TestClient, app_db: S
     app_db.refresh(ep)
     assert ep.active is False  # still inactive, unchanged
     assert not mock_notify.called  # no duplicate notification
-
-
-@respx.mock
-def test_gather_exception_adds_to_retry_list(client: TestClient, app_db: Session):
-    """If _send_single_webhook raises an unexpected exception, gather captures it.
-    The exception path (lines 256-259) adds the endpoint to retry_list."""
-    from unittest.mock import AsyncMock
-
-    from chronos.worker import task_retry_single_webhook
-
-    ep = _create_endpoint(app_db, tc_id=207)
-
-    with patch('chronos.worker._send_single_webhook', new=AsyncMock(side_effect=RuntimeError('boom'))):
-        with patch.object(task_retry_single_webhook, 'apply_async') as mock_apply:
-            task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
-
-    # The exception is caught by gather; the endpoint_id is added to retry_list and a retry is enqueued.
-    assert mock_apply.called
-    app_db.expire_all()
-    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
-    assert len(logs) == 0  # no log written for the exception path, only a retry enqueued
