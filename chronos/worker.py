@@ -286,8 +286,9 @@ def _notify_endpoint_disabled(
             headers={'Authorization': f'Bearer {settings.tc2_shared_key}', 'Content-Type': 'application/json'},
             timeout=10.0,
         )
-        if r.status_code >= 400:
-            app_logger.warning('TC2 endpoint-disabled callback returned %s: %s', r.status_code, r.text)
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        app_logger.warning('TC2 endpoint-disabled callback returned %s: %s', e.response.status_code, e.response.text)
     except Exception as e:
         app_logger.exception('Failed to notify TC2 of disabled endpoint: %s', e)
 
