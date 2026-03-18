@@ -92,10 +92,6 @@ async def webhook_request(
         'Content-Type': 'application/json',
         'webhook-signature': webhook_sig,
     }
-    request_body_str = body.decode(errors='replace')
-    request_data = RequestData(
-        endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=request_body_str
-    )
     with logfire.span('{method=} {url!r}', url=url, method='POST'):
         r = None
         try:
@@ -104,8 +100,7 @@ async def webhook_request(
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
         except httpx.HTTPError as httperr:
             app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
-        except Exception as exc:
-            app_logger.info('Error sending webhook to %s: %s', url, exc)
+    request_data = RequestData(endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=body.decode())
     if r is not None:
         request_data.response_headers = json.dumps(dict(r.headers))
         request_data.response_body = json.dumps(r.content.decode())

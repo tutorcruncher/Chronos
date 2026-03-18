@@ -358,44 +358,6 @@ def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
     assert all(log.webhook_endpoint_id == 1 for log in logs)
 
 
-def test_async_post_webhooks_response_exception_does_not_break_other_tasks():
-    """An exception from one endpoint doesn't prevent logging of successful ones."""
-    failing = WebhookEndpoint(
-        id=1,
-        tc_id=1,
-        name='failing-hook',
-        branch_id=3,
-        webhook_url='https://failing.example.com/hook',
-        api_key='key1',
-        active=True,
-    )
-    healthy = WebhookEndpoint(
-        id=2,
-        tc_id=2,
-        name='healthy-hook',
-        branch_id=3,
-        webhook_url='https://healthy.example.com/hook',
-        api_key='key2',
-        active=True,
-    )
-    payload = json.dumps(
-        {
-            'events': [REALISTIC_TC2_EVENTS[0]],
-            'request_time': 1771509452,
-        }
-    )
-
-    with respx.mock:
-        respx.post('https://failing.example.com/hook').mock(side_effect=RuntimeError('connection exploded'))
-        respx.post('https://healthy.example.com/hook').mock(return_value=httpx.Response(200))
-        logs, success, failed, _ = asyncio.run(_async_post_webhooks([failing, healthy], None, payload))
-
-    # Both attempts are now logged: one failure (exception), one success
-    assert len(logs) == 2
-    assert success == 1
-    assert failed == 1
-    success_log = next(log for log in logs if log.webhook_endpoint_id == 2)
-    assert success_log.status == 'Success'
 
 
 @patch.object(task_send_webhooks, 'apply_async')
