@@ -113,19 +113,6 @@ acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
 SUCCESS_STATUS_CODES = {200, 201, 202, 204}
 
 
-def _get_endpoint_url(endpoint: WebhookEndpoint, url_extension: str | None) -> str | None:
-    if not endpoint.webhook_url.startswith(acceptable_url_schemes):
-        app_logger.error(
-            'Webhook URL does not start with an acceptable url scheme: %s (%s)', endpoint.webhook_url, endpoint.id
-        )
-        return None
-
-    url = endpoint.webhook_url
-    if url_extension:
-        url += f'/{url_extension}'
-    return url
-
-
 def _split_payloads(loaded_payload: dict) -> list[dict]:
     """Split a multi-event payload into individual single-event payloads.
 
@@ -190,24 +177,31 @@ def _request_data_to_log(response: RequestData) -> WebhookLog:
     )
 
 
+def _get_endpoint_url(endpoint: WebhookEndpoint, url_extension: str | None) -> str | None:
+    if not endpoint.webhook_url.startswith(acceptable_url_schemes):
+        app_logger.error(
+            'Webhook URL does not start with an acceptable url scheme: %s (%s)', endpoint.webhook_url, endpoint.id
+        )
+        return None
+
+    url = endpoint.webhook_url
+    if url_extension:
+        url += f'/{url_extension}'
+    return url
+
+
 async def _send_single_webhook(
-    client: AsyncClient,
-    endpoint: WebhookEndpoint,
-    payload_to_send: dict,
-    url_extension: str | None,
+    client: AsyncClient, endpoint: WebhookEndpoint, payload_to_send: dict, url_extension: str | None
 ) -> RequestData | None:
     """Build a signed request and POST it. Returns None if the URL is invalid."""
     url = _get_endpoint_url(endpoint, url_extension)
-    if not url:
-        return None
-    body, webhook_sig = _build_signed_request(endpoint, payload_to_send)
-    return await webhook_request(client, url, endpoint.id, body=body, webhook_sig=webhook_sig)
+    if url:
+        body, webhook_sig = _build_signed_request(endpoint, payload_to_send)
+        return await webhook_request(client, url, endpoint.id, body=body, webhook_sig=webhook_sig)
 
 
 def _send_single_webhook_sync(
-    endpoint: WebhookEndpoint,
-    payload_to_send: dict,
-    url_extension: str | None,
+    endpoint: WebhookEndpoint, payload_to_send: dict, url_extension: str | None
 ) -> RequestData | None:
     """Synchronous wrapper around _send_single_webhook for use in Celery tasks."""
 
@@ -218,14 +212,14 @@ def _send_single_webhook_sync(
     return asyncio.run(_run())
 
 
-def _process_response(response: RequestData, url_extension: str | None) -> tuple[WebhookLog, bool]:
+def _process_response(request_data: RequestData) -> tuple[WebhookLog, bool]:
     """Convert a RequestData into a WebhookLog and return whether it's retryable.
 
     Returns (log, retryable).
     """
-    if not response.successful_response:
-        app_logger.info('No response from endpoint %s', response.endpoint_id)
-    return _request_data_to_log(response), _is_retryable(response)
+    if not request_data.successful_response:
+        app_logger.info('No response from endpoint %s', request_data.endpoint_id)
+    return _request_data_to_log(request_data), _is_retryable(request_data)
 
 
 async def _async_post_webhooks(endpoints, url_extension, payload):
@@ -253,7 +247,7 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
                 retry_list.append((endpoint_id, request_body_str, url_extension))
                 continue
 
-            log, retryable = _process_response(response, url_extension)
+            log, retryable = _process_response(response)
             webhook_logs.append(log)
             if _is_success(response):
                 total_success += 1
@@ -386,7 +380,7 @@ def task_retry_single_webhook(
         if request_data is None:
             return
 
-        log, retryable = _process_response(request_data, url_extension)
+        log, retryable = _process_response(request_data)
         db.add(log)
         db.commit()
 
