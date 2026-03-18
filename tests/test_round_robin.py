@@ -358,8 +358,6 @@ def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
     assert all(log.webhook_endpoint_id == 1 for log in logs)
 
 
-
-
 @patch.object(task_send_webhooks, 'apply_async')
 def test_round_robin_end_to_end_interleaving_two_branches(mock_apply, session: Session, client: TestClient):
     """Two branches enqueued via API are dispatched fairly: one from each per cycle."""

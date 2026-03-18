@@ -28,7 +28,7 @@ Process types (see `Procfile` / `Makefile`):
 ## Core Concepts
 
 - **Branch**: A TC entity (e.g. a company/tenant). Each webhook is associated with a `branch_id`. Endpoints are registered per branch. When `use_round_robin` is on, work is queued and dispatched **per branch** so one busy branch cannot starve others.
-- **Endpoint**: A client’s webhook URL and metadata, stored as `WebhookEndpoint` (tc_id, name, branch_id, webhook_url, api_key, active, etc.). TC creates/updates/deletes these via Chronos API.
+- **Endpoint**: A client's webhook URL and metadata, stored as `WebhookEndpoint` (tc_id, name, branch_id, webhook_url, api_key, active, etc.). TC creates/updates/deletes these via Chronos API.
 - **Webhook payload**: Either `TCWebhook` (events + request_time) or `TCPublicProfileWebhook` (public profile fields). Branch can come from `events[0].branch` or `branch_id`; missing branch is treated as `GLOBAL_BRANCH_ID` (0).
 - **Round-robin**: When `settings.use_round_robin` is True, the API does **not** push directly to Celery. Instead it enqueues to a Redis per-branch list. The dispatcher task runs a loop, cycling over branches with pending jobs and dispatching one (or a batch) per branch into the Celery queue each cycle, with backpressure when the Celery queue is too long.
 
@@ -39,11 +39,11 @@ All TC-facing endpoints require `Authorization: Bearer <tc2_shared_key>`.
 | Method + Path | Purpose |
 |---------------|--------|
 | `GET /` | Health/live check. |
-| `POST /send-webhook-callback` | Accept `TCWebhook`, enqueue sending to all active endpoints for the payload’s branch. |
+| `POST /send-webhook-callback` | Accept `TCWebhook`, enqueue sending to all active endpoints for the payload's branch. |
 | `POST /send-webhook-callback/{url_extension}` | Same but with URL path suffix for endpoints (e.g. public profile). Body: `TCPublicProfileWebhook`. |
 | `POST /create-update-callback` | Create or update `WebhookEndpoint`(s) from TC (`TCIntegrations`). |
 | `POST /delete-endpoint` | Delete an endpoint by TC payload (`TCDeleteIntegration`: tc_id, branch_id). Deletes its logs first. |
-| `GET /{tc_id}/logs/{page}` | Paginated webhook logs for the endpoint with that `tc_id`. Returns up to 50 logs per page (internal query fetches 100, returns 50; count used for “more pages” hint). |
+| `GET /{tc_id}/logs/{page}` | Paginated webhook logs for the endpoint with that `tc_id`. Returns up to 50 logs per page (internal query fetches 100, returns 50; count used for "more pages" hint). |
 
 Request/response shapes are defined in `chronos/pydantic_schema.py` (e.g. `TCWebhook`, `TCPublicProfileWebhook`, `TCIntegrations`, `TCDeleteIntegration`).
 
@@ -58,9 +58,9 @@ DB session: `chronos/db.py` – engine from `pg_dsn` (or `test_pg_dsn` when `set
 
 1. TC sends a webhook to `POST /send-webhook-callback` (or with `url_extension`). Views validate body as `TCWebhook` or `TCPublicProfileWebhook` and check Bearer token.
 2. **Enqueue**:
-   - If **round-robin**: `dispatch_branch_task(task_send_webhooks, branch_id, payload, url_extension)` is called. For event-style payloads, one job per event is enqueued to the branch’s Redis list; otherwise one job. The **dispatcher** later pops from these lists and calls `task_send_webhooks.apply_async(...)` into the Celery queue.
+   - If **round-robin**: `dispatch_branch_task(task_send_webhooks, branch_id, payload, url_extension)` is called. For event-style payloads, one job per event is enqueued to the branch's Redis list; otherwise one job. The **dispatcher** later pops from these lists and calls `task_send_webhooks.apply_async(...)` into the Celery queue.
    - If **no round-robin**: `task_send_webhooks.delay(payload_json, url_extension)` is called directly.
-3. **Worker** runs `task_send_webhooks`: loads payload, resolves `branch_id`, loads all active `WebhookEndpoint` rows for that branch, then runs `_async_post_webhooks` (async HTTP with httpx). For each endpoint it signs the payload (HMAC-SHA256 with endpoint’s api_key), POSTs to endpoint’s URL (with optional `url_extension` path), and builds `WebhookLog` rows. Batch events are split into one request per event for compatibility. Logs are written to the DB in the same worker run.
+3. **Worker** runs `task_send_webhooks`: loads payload, resolves `branch_id`, loads all active `WebhookEndpoint` rows for that branch, then runs `_async_post_webhooks` (async HTTP with httpx). For each endpoint it signs the payload (HMAC-SHA256 with endpoint's api_key), POSTs to endpoint's URL (with optional `url_extension` path), and builds `WebhookLog` rows. Batch events are split into one request per event for compatibility. Logs are written to the DB in the same worker run.
 4. **Cleanup**: An APScheduler job runs every hour and, with a Redis lock (`DELETE_JOBS_KEY`), enqueues a Celery task `_delete_old_logs_job` that deletes `WebhookLog` rows older than 15 days (in batches of 4999).
 
 ## Round-Robin Dispatcher and Job Queue
@@ -74,7 +74,7 @@ DB session: `chronos/db.py` – engine from `pg_dsn` (or `test_pg_dsn` when `set
 
 - **`chronos/tasks/dispatcher.py`**: `dispatch_cycle(batch_limit)` runs one round: get active branches, rotate by cursor (bisect_right), for each branch peek → validate → `task.apply_async(kwargs)` → ack → set cursor, until batch_limit or no more branches. Poison payloads (e.g. invalid JSON) are acked and skipped. Trace context is restored when dispatching.
 
-- **`chronos/worker.py`**: `job_dispatcher_task` runs in a loop: if no active jobs, sleep idle_delay; if Celery queue length ≥ `dispatcher_max_celery_queue`, sleep cycle_delay; else run `dispatch_cycle()` then sleep cycle_delay. Uses `acks_late=False` so the broker doesn’t redeliver this never-ending task.
+- **`chronos/worker.py`**: `job_dispatcher_task` runs in a loop: if no active jobs, sleep idle_delay; if Celery queue length ≥ `dispatcher_max_celery_queue`, sleep cycle_delay; else run `dispatch_cycle()` then sleep cycle_delay. Uses `acks_late=False` so the broker doesn't redeliver this never-ending task.
 
 - **`chronos/tasks/worker_startup.py`**: On `worker_ready`, if the worker consumes the `dispatcher` queue, it starts `job_dispatcher_task.apply_async(countdown=60)`.
 
@@ -110,11 +110,34 @@ CORS: in production, origins are beta or secure TutorCruncher; in `dev_mode`, `*
 - **Sentry**: If `sentry_dsn` is set, Sentry is initialized in `chronos/main.py` for the web process.
 - Worker processes dispose the DB engine on fork (`worker_process_init`) and optionally instrument the worker (Logfire).
 
-## Webhook retries and disable-on-failure (implemented)
+## Webhook Retries and Disable-on-Failure
 
-- **Retries (non-blocking)**: No in-process retries. On retryable failure (timeout, 5xx, 429), enqueue a per-endpoint Celery task with `apply_async(..., countdown=backoff)`. New task `task_retry_single_webhook` does one attempt; if still retryable and within 30 mins of first attempt, re-enqueue itself with exponential backoff (larger multiplier). Max retry window: 30 minutes from first attempt.
-- **Disable by failure rate**: If **&gt;20%** of delivery attempts for an endpoint fail within a time window **and** there have been at least a minimum number of attempts (e.g. 10) in that window, set `WebhookEndpoint.active = False`. Only when transitioning from active → inactive, POST to TC2 at `tc2_endpoint_disabled_url` (if set) so TC2 can show “Integration disabled due to delivery failures”. Config: `webhook_disable_failure_rate_threshold` (default 0.20), `webhook_disable_min_attempts`, `webhook_disable_failure_window_minutes`, `tc2_endpoint_disabled_url`.
-- **Log every attempt**: Ensure timeouts/connection errors also write a `WebhookLog` (status != 'Success') so failure-rate calculation is accurate.
+### Retry logic
+
+Retries are non-blocking: on a retryable failure, `task_retry_single_webhook` is enqueued via Celery `apply_async(..., countdown=backoff)` rather than blocking the worker.
+
+**What is retried:**
+- No response / timeout — server unreachable or too slow, likely transient.
+- `429 Too Many Requests` — server asked us to back off.
+- `5xx` — server-side error, likely transient (restart, deploy, overload).
+
+**What is NOT retried:**
+- `2xx` — success.
+- `4xx` (except 429) — client error (wrong URL, auth failure, resource gone). Retrying the same request won't help. Persistent 4xx failures are caught by the auto-disable threshold instead.
+
+**Backoff schedule** (configurable via settings):
+- Attempt 1 → wait 60 s → attempt 2
+- Attempt 2 → wait 180 s → attempt 3
+- Attempt 3 → wait 540 s → attempt 4
+- …continuing until 30 minutes have elapsed since the first attempt, then abandoned.
+
+Settings: `webhook_retry_backoff_base_seconds` (60), `webhook_retry_backoff_multiplier` (3.0), `webhook_retry_max_window_seconds` (1800).
+
+### Disable-on-failure
+
+After each delivery batch, Chronos checks `_check_and_disable_endpoint_if_needed` for every endpoint that had a failure. If **>20%** of attempts in the last 60 minutes are non-`Success` **and** there have been at least 10 attempts in that window, `WebhookEndpoint.active` is set to `False`. On disable, Chronos POSTs to `tc2_endpoint_disabled_url` (if set) so TC2 can surface the event to the customer.
+
+Settings: `webhook_disable_failure_rate_threshold` (0.20), `webhook_disable_min_attempts` (10), `webhook_disable_failure_window_minutes` (60), `tc2_endpoint_disabled_url`.
 
 ## File Map (Summary)
 

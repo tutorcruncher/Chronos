@@ -135,17 +135,31 @@ def _split_payloads(loaded_payload: dict) -> list[dict]:
 
 
 def _build_signed_request(endpoint: WebhookEndpoint, payload_to_send: dict) -> tuple[bytes, str]:
+    """Encode payload as JSON and sign it with the endpoint's api_key using HMAC-SHA256."""
     body = json.dumps(payload_to_send).encode()
     sig = hmac.new(endpoint.api_key.encode(), body, hashlib.sha256)
     return body, sig.hexdigest()
 
 
 def _is_success(response: RequestData) -> bool:
+    """True if the HTTP response indicates successful delivery (200, 201, 202, 204)."""
     return response.status_code in SUCCESS_STATUS_CODES
 
 
 def _is_retryable(response: RequestData) -> bool:
-    """True if the delivery failed in a way worth retrying (timeout, 5xx, 429)."""
+    """True if the delivery failed in a way worth retrying.
+
+    Retried:
+    - No response / timeout: server unreachable or took too long — likely transient.
+    - 429 Too Many Requests: server asked us to back off.
+    - 5xx: server-side error — likely transient (restart, deploy, overload).
+
+    Not retried:
+    - 2xx: success.
+    - 4xx (except 429): client error — the endpoint URL is wrong, auth failed, or the
+      resource doesn't exist. Retrying with the same request won't help. Persistent 4xx
+      failures will eventually trigger the auto-disable threshold instead.
+    """
     if _is_success(response):
         return False
     if response.status_code == 429:
@@ -158,6 +172,7 @@ def _is_retryable(response: RequestData) -> bool:
 
 
 def _get_webhook_status(response: RequestData) -> str:
+    """Human-readable delivery status string written to WebhookLog."""
     if _is_success(response):
         return 'Success'
     if not response.successful_response:
@@ -166,6 +181,7 @@ def _get_webhook_status(response: RequestData) -> str:
 
 
 def _request_data_to_log(response: RequestData) -> WebhookLog:
+    """Convert a completed RequestData into a WebhookLog ready for DB insertion."""
     return WebhookLog(
         webhook_endpoint_id=response.endpoint_id,
         request_headers=response.request_headers,
@@ -178,6 +194,10 @@ def _request_data_to_log(response: RequestData) -> WebhookLog:
 
 
 def _get_endpoint_url(endpoint: WebhookEndpoint, url_extension: str | None) -> str | None:
+    """Return the delivery URL for an endpoint, appending url_extension if provided.
+
+    Returns None (and logs an error) if the URL scheme is not in acceptable_url_schemes.
+    """
     if not endpoint.webhook_url.startswith(acceptable_url_schemes):
         app_logger.error(
             'Webhook URL does not start with an acceptable url scheme: %s (%s)', endpoint.webhook_url, endpoint.id
@@ -223,6 +243,13 @@ def _process_response(request_data: RequestData) -> tuple[WebhookLog, bool]:
 
 
 async def _async_post_webhooks(endpoints, url_extension, payload):
+    """Fan out a payload to all endpoints concurrently and return delivery results.
+
+    Splits multi-event payloads into one request per event (for Zapier compatibility),
+    signs each request, and fires them all via asyncio.gather. Returns
+    (webhook_logs, total_success, total_failed, retry_list) where retry_list is a list
+    of (endpoint_id, payload_str, url_extension) tuples for retryable failures.
+    """
     webhook_logs = []
     total_success, total_failed = 0, 0
     retry_list = []  # (endpoint_id, payload_str, url_extension)
