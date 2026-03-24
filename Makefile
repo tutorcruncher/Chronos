@@ -1,4 +1,4 @@
-.PHONY: install install-dev lint format test reset-db create-db-tables run-server-dev run-server run-worker run-dispatcher
+.PHONY: install install-dev lint format test reset-db create-db-tables run-server-dev run-server run-worker run-dispatcher run-webhook-lab-receiver
 
 # Install dependencies (normal packages only)
 install:
@@ -49,3 +49,7 @@ run-worker:
 # Run Celery dispatcher
 run-dispatcher:
 	uv run celery -A chronos.worker worker -Q dispatcher -c 1 --without-heartbeat --without-mingle --soft-time-limit=0 --time-limit=0
+
+# Mock webhook receiver for manual retry/disable lab (see chronos/scripts/webhook_retry_disable_lab.py)
+run-webhook-lab-receiver:
+	uv run uvicorn chronos.scripts.mock_webhook_receiver:app --host 127.0.0.1 --port 18080

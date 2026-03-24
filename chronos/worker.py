@@ -7,6 +7,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 
 import httpx
 import logfire
@@ -100,6 +101,9 @@ async def webhook_request(
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
         except httpx.HTTPError as httperr:
             app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
+        except Exception as exc:
+            # Malformed URLs, transport/assert failures from test doubles, etc. — still one delivery attempt.
+            app_logger.info('Error sending webhook to %s: %s', url, exc)
     request_data = RequestData(endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=body.decode())
     if r is not None:
         request_data.response_headers = json.dumps(dict(r.headers))
@@ -285,6 +289,15 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     return webhook_logs, total_success, total_failed, retry_list
 
 
+def _webhook_host_is_exempt_from_auto_disable(webhook_url: str) -> bool:
+    """True if the webhook target is a TutorCruncher first-party host (never auto-disabled)."""
+    parsed = urlparse(webhook_url)
+    host = (parsed.hostname or '').lower()
+    if not host:
+        return False
+    return host == 'tutorcruncher.com' or host.endswith('.tutorcruncher.com')
+
+
 def _notify_endpoint_disabled(
     tc_id: int,
     branch_id: int,
@@ -321,6 +334,8 @@ def _notify_endpoint_disabled(
 def _check_and_disable_endpoint_if_needed(db: Session, endpoint: WebhookEndpoint) -> None:
     """If endpoint has >threshold failure rate in the window with min attempts, set active=False and notify TC2."""
     if not endpoint.active:
+        return
+    if _webhook_host_is_exempt_from_auto_disable(endpoint.webhook_url):
         return
     window_start = datetime.now(UTC) - timedelta(minutes=settings.webhook_disable_failure_window_minutes)
     # Count total and failures in window

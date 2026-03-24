@@ -137,7 +137,7 @@ Settings: `webhook_retry_backoff_base_seconds` (1.0), `webhook_retry_backoff_mul
 
 ### Disable-on-failure
 
-After each delivery batch, Chronos checks `_check_and_disable_endpoint_if_needed` for every endpoint that had a failure. If **>20%** of attempts in the last 60 minutes are non-`Success` **and** there have been at least 10 attempts in that window, `WebhookEndpoint.active` is set to `False`. On disable, Chronos POSTs to `tc2_endpoint_disabled_url` (if set) so TC2 can surface the event to the customer.
+After each delivery batch, Chronos checks `_check_and_disable_endpoint_if_needed` for every endpoint that had a failure. If **>20%** of attempts in the last 60 minutes are non-`Success` **and** there have been at least 10 attempts in that window, `WebhookEndpoint.active` is set to `False`. On disable, Chronos POSTs to `tc2_endpoint_disabled_url` (if set) so TC2 can surface the event to the customer. Endpoints whose `webhook_url` host is `tutorcruncher.com` or `*.tutorcruncher.com` are skipped (never auto-disabled).
 
 Settings: `webhook_disable_failure_rate_threshold` (0.20), `webhook_disable_min_attempts` (10), `webhook_disable_failure_window_minutes` (60), `tc2_endpoint_disabled_url`.
 
@@ -157,5 +157,11 @@ Settings: `webhook_disable_failure_rate_threshold` (0.20), `webhook_disable_min_
 | `chronos/settings.py` | Pydantic Settings. |
 | `chronos/observability.py` | Logfire configure and instrument. |
 | `chronos/scripts/create_db_tables.py` | Calls `init_db()` when `dev_mode`. |
+| `chronos/scripts/mock_webhook_receiver.py` | Local FastAPI receiver for manual lab (`/hook`, `/lab-ext/{segment}`, TC2 notify route). |
+| `chronos/scripts/webhook_retry_disable_lab.py` | Manual lab: `python -m chronos.scripts.webhook_retry_disable_lab` runs all retry/disable checks in one go; `--runbook` prints setup only. |
+
+## Updating CLAUDE.md
+
+After adding or materially changing Chronos code (behavior, HTTP API, settings, worker or dispatcher logic, data models, observability, or operational scripts such as under `chronos/scripts/`), **review this file** and update any sections that are now inaccurate or missing. Prefer small, targeted edits to the relevant subsection. Skip updates for trivial changes that do not affect how Chronos works (typos, formatting-only refactors, renames with no semantic change).
 
 Use this document to reason about where to add or change behavior (e.g. new webhook types, new endpoints, or dispatcher tuning).

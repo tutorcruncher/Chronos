@@ -260,6 +260,60 @@ def test_job_dispatcher_task_catches_generic_exception_and_keeps_running():
     assert 1.0 in sleep_calls
 
 
+@respx.mock
+def test_job_dispatcher_task_smoke_dispatches_live_queued_job(session: Session, client: TestClient, app_db: Session):
+    """API enqueue -> job_dispatcher_task -> task_send_webhooks -> downstream delivery/log."""
+    from sqlalchemy import delete as sa_delete
+
+    from chronos.worker import job_dispatcher_task
+
+    ep = WebhookEndpoint(
+        tc_id=650,
+        name='dispatcher-smoke',
+        branch_id=99,
+        webhook_url='https://dispatcher-smoke.example.com/hook',
+        api_key='dispatcher_secret',
+        active=True,
+    )
+    app_db.add(ep)
+    app_db.commit()
+    ep_id = ep.id
+
+    try:
+        mock_endpoint = respx.post(ep.webhook_url).mock(return_value=httpx.Response(200))
+
+        payload = get_dft_webhook_data(branch_id=99)
+        headers = _get_webhook_headers()
+        r = client.post(send_webhook_url, data=json.dumps(payload), headers=headers)
+        assert r.status_code == 200
+        assert job_queue.get_queue_length(99) == 1
+
+        def inline_apply_async(*args, **kwargs):
+            kw = kwargs.get('kwargs', kwargs)
+            task_send_webhooks(**kw)
+
+        with (
+            patch.object(task_send_webhooks, 'apply_async', side_effect=inline_apply_async) as mock_apply,
+            patch('time.sleep', side_effect=SystemExit),
+        ):
+            with pytest.raises(SystemExit):
+                job_dispatcher_task(max_celery_queue=100, cycle_delay=0.01, idle_delay=1.0)
+
+        assert mock_apply.call_count == 1
+        assert mock_endpoint.called
+        assert job_queue.get_queue_length(99) == 0
+
+        app_db.expire_all()
+        logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id)).all()
+        assert len(logs) == 1
+        assert logs[0].status == WebhookStatus.SUCCESS
+        assert logs[0].status_code == 200
+    finally:
+        app_db.exec(sa_delete(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id))
+        app_db.exec(sa_delete(WebhookEndpoint).where(WebhookEndpoint.id == ep_id))
+        app_db.commit()
+
+
 def test_worker_ready_starts_dispatcher_only_on_dispatcher_queue():
     from chronos.tasks.worker_startup import start_dispatcher_on_worker_ready
 

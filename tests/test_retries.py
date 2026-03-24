@@ -18,7 +18,7 @@ from chronos.worker import job_queue, task_retry_single_webhook, task_send_webho
 from tests.test_helpers import _get_webhook_headers, get_dft_webhook_data, send_webhook_url
 
 # tc_id range used by retry tests; cleaned up after each test so other test files see a clean DB.
-RETRY_TEST_TC_IDS = range(100, 112)
+RETRY_TEST_TC_IDS = range(100, 120)
 
 
 @pytest.fixture(autouse=True)
@@ -138,6 +138,24 @@ def test_no_retry_on_400(client: TestClient, app_db: Session):
     assert len(logs) == 1
     assert logs[0].status == WebhookStatus.UNEXPECTED_RESPONSE
     assert logs[0].status_code == 400
+    assert not mock_retry.called
+
+
+@respx.mock
+def test_no_retry_on_redirect_307(client: TestClient, app_db: Session):
+    """TC2 request -> endpoint returns 307 -> log written, retry NOT enqueued."""
+    ep = _create_endpoint(app_db, tc_id=112)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(307))
+
+    payload = get_dft_webhook_data()
+    with patch.object(task_retry_single_webhook, 'apply_async') as mock_retry:
+        task_send_webhooks(payload=json.dumps(payload), url_extension=None)
+
+    app_db.expire_all()
+    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
+    assert len(logs) == 1
+    assert logs[0].status == WebhookStatus.UNEXPECTED_RESPONSE
+    assert logs[0].status_code == 307
     assert not mock_retry.called
 
 

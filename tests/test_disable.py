@@ -20,7 +20,7 @@ from tests.test_helpers import (
 )
 
 # tc_id range used by disable tests; cleaned up after each test so other test files see a clean DB.
-DISABLE_TEST_TC_IDS = range(200, 208)
+DISABLE_TEST_TC_IDS = range(200, 230)
 
 
 @pytest.fixture(autouse=True)
@@ -98,9 +98,42 @@ def test_disable_after_repeated_failures(client: TestClient, app_db: Session):
     assert ep.active is False
     assert mock_notify.called
     body = json.loads(mock_notify.calls[0].request.content)
+    headers = mock_notify.calls[0].request.headers
     assert body['tc_id'] == 200
     assert body['branch_id'] == 199
+    assert body['name'] == ep.name
+    assert body['webhook_url'] == ep.webhook_url
     assert body['failure_count'] == 4  # 3 + 1 from this send
+    assert body['total_attempts'] == 11
+    assert body['window_minutes'] == settings.webhook_disable_failure_window_minutes
+    assert body['reason'] == 'too_many_failures'
+    assert headers['authorization'] == f'Bearer {settings.tc2_shared_key}'
+    assert headers['content-type'] == 'application/json'
+
+
+@respx.mock
+def test_timeout_failure_can_trigger_disable_and_notify(client: TestClient, app_db: Session):
+    """Timeouts count as failures for disable calculations and send the normal TC2 payload."""
+    ep = _create_endpoint(app_db, tc_id=207)
+    # 9 logs, 2 failures. One timeout makes 3/10 = 30% and meets the min-attempts threshold.
+    _add_logs(app_db, ep.id, count=9, failure_count=2)
+    respx.post(ep.webhook_url).mock(side_effect=httpx.TimeoutException('timeout'))
+
+    notify_url = 'https://tc2.example.com/endpoint-disabled'
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
+    assert len(logs) == 10
+    assert logs[-1].status == WebhookStatus.NO_RESPONSE
+    assert ep.active is False
+    assert mock_notify.called
+    body = json.loads(mock_notify.calls[0].request.content)
+    assert body['failure_count'] == 3
+    assert body['total_attempts'] == 10
     assert body['reason'] == 'too_many_failures'
 
 
@@ -213,3 +246,94 @@ def test_disable_already_inactive_endpoint_skipped(client: TestClient, app_db: S
     app_db.refresh(ep)
     assert ep.active is False  # still inactive, unchanged
     assert not mock_notify.called  # no duplicate notification
+
+
+@respx.mock
+def test_disable_skipped_for_tutorcruncher_subdomain(client: TestClient, app_db: Session):
+    """First-party *.tutorcruncher.com webhook URLs are never auto-disabled."""
+    tc_url = 'https://hooks.tutorcruncher.com/inbound'
+    ep = _create_endpoint(app_db, tc_id=210, webhook_url=tc_url)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(tc_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2.example.com/disabled'
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is True
+    assert not mock_notify.called
+
+
+@respx.mock
+def test_disable_skipped_for_tutorcruncher_apex_domain(client: TestClient, app_db: Session):
+    """Apex tutorcruncher.com host is also exempt from auto-disable."""
+    tc_url = 'https://tutorcruncher.com/api/webhook'
+    ep = _create_endpoint(app_db, tc_id=211, webhook_url=tc_url)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(tc_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2.example.com/disabled'
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is True
+    assert not mock_notify.called
+
+
+@respx.mock
+def test_disable_still_applies_for_typosquat_tutorcruncher_domain(client: TestClient, app_db: Session):
+    """Hosts that merely contain 'tutorcruncher' but are not under tutorcruncher.com still disable."""
+    squatter_url = 'https://fake-tutorcruncher.com/hook'
+    ep = _create_endpoint(app_db, tc_id=212, webhook_url=squatter_url)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(squatter_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2.example.com/disabled'
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+    assert mock_notify.called
+
+
+@respx.mock
+def test_disable_applies_when_webhook_url_has_no_hostname_e2e(client: TestClient, app_db: Session):
+    """https with empty netloc has no hostname -> not exempt; same path as normal auto-disable (TC2 -> worker -> DB)."""
+    no_host_url = 'https:///webhook'
+    ep = _create_endpoint(app_db, tc_id=213, webhook_url=no_host_url)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    # No respx route for this URL: outbound POST fails (respx AllMockedAssertionError and/or httpx URL handling);
+    # worker still records a non-success log so this batch triggers _check_and_disable_endpoint_if_needed.
+    notify_url = 'https://tc2.example.com/disabled'
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+    assert mock_notify.called
+
+
+@respx.mock
+def test_disable_skipped_for_tutorcruncher_mixed_case_host_e2e(client: TestClient, app_db: Session):
+    """Exemption uses hostname case-insensitively; full send path leaves endpoint active."""
+    tc_url = 'https://HOOKS.TUTORCRUNCHER.COM/inbound'
+    ep = _create_endpoint(app_db, tc_id=214, webhook_url=tc_url)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(tc_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2.example.com/disabled'
+    with patch.object(settings, 'tc2_endpoint_disabled_url', notify_url):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is True
+    assert not mock_notify.called
