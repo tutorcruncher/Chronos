@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 
 from chronos.db import get_session
 from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCPublicProfileWebhook, TCWebhook
-from chronos.sql_models import WebhookEndpoint
+from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import settings
 from chronos.worker import GLOBAL_BRANCH_ID, dispatch_branch_task, task_delete_endpoint, task_send_webhooks
 

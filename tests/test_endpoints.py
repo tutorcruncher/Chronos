@@ -78,7 +78,11 @@ def test_delete_endpoint(session: Session, client: TestClient):
     ep_id = ep.id
 
     for _ in range(3):
-        session.add(create_webhook_log_from_dft_data(webhook_endpoint_id=ep_id, timestamp=datetime.now(UTC).replace(tzinfo=None)))
+        session.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=ep_id, timestamp=datetime.now(UTC).replace(tzinfo=None)
+            )
+        )
     session.commit()
 
     payload = get_dft_endpoint_deletion_data()
