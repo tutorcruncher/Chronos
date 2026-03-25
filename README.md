@@ -11,8 +11,10 @@ This means the Chronos needs some certain functionality:
 * An endpoint for CRUD operations on the Endpoint objects
 * An endpoint for retrieving webhook logs to be displayed in TC2
 * An endpoint for distributing webhooks to all Endpoints related to a branch
+* Delete-endpoint requests are acknowledged quickly and cleaned up asynchronously on the worker
 
 * A job that runs periodically deleting all logs older than 15 days
+* Large webhook-log deletes are processed in batches to avoid overwhelming Postgres
 
 # SetUp Local
 To set up the Chronos system locally follow these steps:

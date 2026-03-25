@@ -1,12 +1,16 @@
 import json
+from datetime import UTC, datetime
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from chronos.main import app
+from chronos.sql_models import WebhookEndpoint, WebhookLog
 from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
+    create_webhook_log_from_dft_data,
     get_dft_endpoint_data_list,
     get_dft_endpoint_deletion_data,
 )
@@ -71,16 +75,30 @@ def test_delete_endpoint(session: Session, client: TestClient):
     ep = eps[0]
     session.add(ep)
     session.commit()
+    ep_id = ep.id
+
+    for _ in range(3):
+        session.add(create_webhook_log_from_dft_data(webhook_endpoint_id=ep_id, timestamp=datetime.now(UTC).replace(tzinfo=None)))
+    session.commit()
 
     payload = get_dft_endpoint_deletion_data()
     headers = _get_webhook_headers()
-    r = client.post(
-        delete_url,
-        data=json.dumps(payload),
-        headers=headers,
-    )
+    with patch('chronos.views.task_delete_endpoint.delay') as mock_delay:
+        r = client.post(
+            delete_url,
+            data=json.dumps(payload),
+            headers=headers,
+        )
+
     assert r.status_code == 200
-    assert r.json() == {'message': f'WebhookEndpoint {ep.name} (TC ID: {ep.tc_id}) deleted'}
+    assert r.json() == {'message': f'WebhookEndpoint {ep.name} (TC ID: {ep.tc_id}) deletion initiated'}
+    mock_delay.assert_called_once_with(ep_id)
+
+    endpoint = session.exec(select(WebhookEndpoint).where(WebhookEndpoint.id == ep_id)).one()
+    assert endpoint.active is False
+
+    logs = session.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id)).all()
+    assert len(logs) == 3
 
 
 def test_delete_endpoint_doesnt_exist(session: Session, client: TestClient):
