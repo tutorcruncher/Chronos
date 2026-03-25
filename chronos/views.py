@@ -11,7 +11,7 @@ from chronos.db import get_session
 from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCPublicProfileWebhook, TCWebhook
 from chronos.sql_models import WebhookEndpoint, WebhookLog
 from chronos.utils import settings
-from chronos.worker import GLOBAL_BRANCH_ID, dispatch_branch_task, task_send_webhooks
+from chronos.worker import GLOBAL_BRANCH_ID, dispatch_branch_task, task_delete_endpoint, task_send_webhooks
 
 main_router = APIRouter()
 security = HTTPBearer()
@@ -181,16 +181,12 @@ async def delete_endpoint(
     except NoResultFound as e:
         return {'message': f'WebhookEndpoint with TC ID: {webhook_payload["tc_id"]} not found: {e}'}
 
-    # Have to delete existing hooks before deleting the endpoint
-    webhooks_qs = select(WebhookLog).filter_by(webhook_endpoint_id=endpoint.id)
-    webhooks = db.exec(webhooks_qs).all()
-    for webhook in webhooks:
-        db.delete(webhook)
+    # Deactivate immediately so no new sends pick this endpoint while cleanup runs.
+    endpoint.active = False
     db.commit()
 
-    db.delete(endpoint)
-    db.commit()
-    return {'message': f'WebhookEndpoint {endpoint.name} (TC ID: {endpoint.tc_id}) deleted'}
+    task_delete_endpoint.delay(endpoint.id)
+    return {'message': f'WebhookEndpoint {endpoint.name} (TC ID: {endpoint.tc_id}) deletion initiated'}
 
 
 @main_router.get('/{tc_id}/logs/{page}', description='Send logs from Chronos to TC')
