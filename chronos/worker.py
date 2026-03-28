@@ -58,6 +58,9 @@ cache = Redis.from_url(settings.redis_url)
 # Initialize job queue with the same Redis client
 job_queue = JobQueue(redis_client=cache)
 
+# Large enough to make progress quickly without keeping delete logic in settings.
+WEBHOOK_LOG_DELETE_BATCH_SIZE = 50_000
+
 
 @worker_process_init.connect
 def init_worker_process(**kwargs):
@@ -529,13 +532,52 @@ def get_count(date_to_delete_before: datetime) -> int:
 
 
 @celery_app.task
+def task_delete_endpoint(endpoint_id: int) -> None:
+    """Delete an endpoint and its logs asynchronously in safe batches."""
+    with Session(engine) as db:
+        endpoint = db.get(WebhookEndpoint, endpoint_id)
+        if endpoint is None:
+            app_logger.info('Endpoint %s already deleted before async cleanup started', endpoint_id)
+            return
+
+        total_deleted = 0
+        delete_limit = WEBHOOK_LOG_DELETE_BATCH_SIZE
+        while True:
+            log_ids = db.exec(
+                select(WebhookLog.id).where(WebhookLog.webhook_endpoint_id == endpoint_id).limit(delete_limit)
+            ).all()
+            if not log_ids:
+                break
+
+            delete_statement = delete(WebhookLog).where(WebhookLog.id.in_(log_id for log_id in log_ids))
+            db.exec(delete_statement)
+            db.commit()
+            total_deleted += len(log_ids)
+
+            app_logger.info('Deleted %s logs so far for endpoint %s', total_deleted, endpoint_id)
+
+            del log_ids
+            del delete_statement
+            gc.collect()
+
+        endpoint = db.get(WebhookEndpoint, endpoint_id)
+        if endpoint is None:
+            app_logger.info('Endpoint %s already deleted during async cleanup', endpoint_id)
+            return
+
+        db.delete(endpoint)
+        db.commit()
+        app_logger.info('Deleted endpoint %s after removing %s logs', endpoint_id, total_deleted)
+
+
+@celery_app.task
 def _delete_old_logs_job():
     # with logfire.span('Started to delete old logs'):
     with Session(engine) as db:
         # Get all logs older than 15 days
         date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
         count = get_count(date_to_delete_before)
-        delete_limit = 4999
+        delete_limit = WEBHOOK_LOG_DELETE_BATCH_SIZE
         while count > 0:
             app_logger.info(f'Deleting {count} logs')
             logs_to_delete = db.exec(

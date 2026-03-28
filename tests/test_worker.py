@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import httpx
@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, col, select
 
 from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
-from chronos.worker import _delete_old_logs_job, task_send_webhooks
+from chronos.worker import _delete_old_logs_job, task_delete_endpoint, task_send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,
     create_endpoint_from_dft_data,
@@ -449,6 +449,94 @@ class TestWorkers:
         logs = db.exec(select(WebhookLog)).all()
         # The log from 15 days ago is seconds older than the check and thus sdoesn't get deleted
         assert len(logs) == 15
+
+    def test_delete_endpoint_task_deletes_logs_in_batches(self, db: Session, client: TestClient, celery_session_worker):
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+        ep_id = ep.id
+
+        for _ in range(5):
+            db.add(
+                create_webhook_log_from_dft_data(
+                    webhook_endpoint_id=ep_id, timestamp=datetime.now(UTC).replace(tzinfo=None)
+                )
+            )
+        db.commit()
+
+        with patch('chronos.worker.WEBHOOK_LOG_DELETE_BATCH_SIZE', 2):
+            task_delete_endpoint(ep_id)
+
+        db.expire_all()
+        endpoint = db.get(WebhookEndpoint, ep_id)
+        logs = db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id)).all()
+        assert endpoint is None
+        assert not logs
+
+    def test_delete_endpoint_task_is_idempotent(self, db: Session, client: TestClient, celery_session_worker):
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+        ep_id = ep.id
+
+        for _ in range(2):
+            db.add(
+                create_webhook_log_from_dft_data(
+                    webhook_endpoint_id=ep_id, timestamp=datetime.now(UTC).replace(tzinfo=None)
+                )
+            )
+        db.commit()
+
+        task_delete_endpoint(ep_id)
+        task_delete_endpoint(ep_id)
+        task_delete_endpoint(999999)
+
+        db.expire_all()
+        endpoint = db.get(WebhookEndpoint, ep_id)
+        logs = db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id)).all()
+        assert endpoint is None
+        assert not logs
+
+    def test_delete_endpoint_task_handles_endpoint_removed_mid_cleanup(
+        self, db: Session, client: TestClient, celery_session_worker
+    ):
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+        ep_id = ep.id
+
+        for _ in range(2):
+            db.add(
+                create_webhook_log_from_dft_data(
+                    webhook_endpoint_id=ep_id, timestamp=datetime.now(UTC).replace(tzinfo=None)
+                )
+            )
+        db.commit()
+
+        original_get = Session.get
+        get_call_count = 0
+
+        def get_side_effect(session, model, ident, *args, **kwargs):
+            nonlocal get_call_count
+            if model is WebhookEndpoint and ident == ep_id:
+                get_call_count += 1
+                if get_call_count == 2:
+                    with Session(session.get_bind()) as concurrent_db:
+                        endpoint = concurrent_db.get(WebhookEndpoint, ep_id)
+                        if endpoint is not None:
+                            concurrent_db.delete(endpoint)
+                            concurrent_db.commit()
+                    return None
+            return original_get(session, model, ident, *args, **kwargs)
+
+        with patch.object(Session, 'get', autospec=True, side_effect=get_side_effect):
+            task_delete_endpoint(ep_id)
+
+        db.expire_all()
+        endpoint = db.get(WebhookEndpoint, ep_id)
+        logs = db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep_id)).all()
+        assert endpoint is None
+        assert not logs
 
     # Used for testing memory usage. Unnecessary for CI testing
     # @profile and install memory-profiler to use
