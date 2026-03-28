@@ -7,6 +7,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 
 import httpx
 import logfire
@@ -23,7 +24,7 @@ from sqlmodel import Session, select
 
 from chronos.db import engine
 from chronos.pydantic_schema import RequestData
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.queue import JobQueue
 from chronos.utils import app_logger, settings
 
@@ -103,6 +104,9 @@ async def webhook_request(
             app_logger.info('Timeout error sending webhook to %s: %s', url, terr)
         except httpx.HTTPError as httperr:
             app_logger.info('HTTP error sending webhook to %s: %s', url, httperr)
+        except Exception as exc:
+            # Malformed URLs, transport/assert failures from test doubles, etc. — still one delivery attempt.
+            app_logger.info('Error sending webhook to %s: %s', url, exc)
     request_data = RequestData(endpoint_id=endpoint_id, request_headers=json.dumps(headers), request_body=body.decode())
     if r is not None:
         request_data.response_headers = json.dumps(dict(r.headers))
@@ -113,86 +117,269 @@ async def webhook_request(
 
 
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
+SUCCESS_STATUS_CODES = {200, 201, 202, 204}
+
+
+def _split_payloads(loaded_payload: dict) -> list[dict]:
+    """Split a multi-event payload into individual single-event payloads.
+
+    Non-event payloads (e.g. TCPublicProfileWebhook) are returned as-is in a list.
+    """
+    events = loaded_payload.get('events')
+    if events is None:
+        return [copy.deepcopy(loaded_payload)]
+
+    base = {k: v for k, v in loaded_payload.items() if k != 'events'}
+    payloads_to_send = []
+    for event in events:
+        # Split each action event into individual requests for reverse compatibility
+        # with Zapier and other client integrations.
+        # TODO: remove the splitting logic here after Issue #119 fix is deployed
+        single_event_payload = copy.deepcopy(base)
+        single_event_payload['events'] = [copy.deepcopy(event)]
+        payloads_to_send.append(single_event_payload)
+    return payloads_to_send
+
+
+def _build_signed_request(endpoint: WebhookEndpoint, payload_to_send: dict) -> tuple[bytes, str]:
+    """Encode payload as JSON and sign it with the endpoint's api_key using HMAC-SHA256."""
+    body = json.dumps(payload_to_send).encode()
+    sig = hmac.new(endpoint.api_key.encode(), body, hashlib.sha256)
+    return body, sig.hexdigest()
+
+
+def _is_success(response: RequestData) -> bool:
+    """True if the HTTP response indicates successful delivery (200, 201, 202, 204)."""
+    return response.status_code in SUCCESS_STATUS_CODES
+
+
+def _is_retryable(response: RequestData) -> bool:
+    """True if the delivery failed in a way worth retrying.
+
+    Retried:
+    - No response / timeout: server unreachable or took too long — likely transient.
+    - 429 Too Many Requests: server asked us to back off.
+    - 5xx: server-side error — likely transient (restart, deploy, overload).
+
+    Not retried:
+    - 2xx: success.
+    - 3xx: redirect — httpx does not follow redirects on POST; the endpoint URL has
+      moved and the customer needs to update it.
+    - 4xx (except 429): client error — the endpoint URL is wrong, auth failed, or the
+      resource doesn't exist. Retrying with the same request won't help. Persistent 4xx
+      failures will eventually trigger the auto-disable threshold instead.
+    """
+    if _is_success(response):
+        return False
+    if response.status_code == 429:
+        return True
+    if response.status_code is not None and response.status_code >= 500:
+        return True
+    if not response.successful_response:
+        return True
+    return False
+
+
+def _get_webhook_status(response: RequestData) -> WebhookStatus:
+    """Human-readable delivery status string written to WebhookLog."""
+    if _is_success(response):
+        return WebhookStatus.SUCCESS
+    if not response.successful_response:
+        return WebhookStatus.NO_RESPONSE
+    return WebhookStatus.UNEXPECTED_RESPONSE
+
+
+def _request_data_to_log(response: RequestData) -> WebhookLog:
+    """Convert a completed RequestData into a WebhookLog ready for DB insertion."""
+    return WebhookLog(
+        webhook_endpoint_id=response.endpoint_id,
+        request_headers=response.request_headers,
+        request_body=response.request_body,
+        response_headers=response.response_headers,
+        response_body=response.response_body,
+        status=_get_webhook_status(response),
+        status_code=response.status_code,
+    )
+
+
+def _get_endpoint_url(endpoint: WebhookEndpoint, url_extension: str | None) -> str | None:
+    """Return the delivery URL for an endpoint, appending url_extension if provided.
+
+    Returns None (and logs an error) if the URL scheme is not in acceptable_url_schemes.
+    """
+    if not endpoint.webhook_url.startswith(acceptable_url_schemes):
+        app_logger.error(
+            'Webhook URL does not start with an acceptable url scheme: %s (%s)', endpoint.webhook_url, endpoint.id
+        )
+        return None
+
+    url = endpoint.webhook_url
+    if url_extension:
+        url += f'/{url_extension}'
+    return url
+
+
+async def _send_single_webhook(
+    client: AsyncClient, endpoint: WebhookEndpoint, payload_to_send: dict, url_extension: str | None
+) -> RequestData | None:
+    """Build a signed request and POST it. Returns None if the URL is invalid."""
+    url = _get_endpoint_url(endpoint, url_extension)
+    if url:
+        body, webhook_sig = _build_signed_request(endpoint, payload_to_send)
+        return await webhook_request(client, url, endpoint.id, body=body, webhook_sig=webhook_sig)
+
+
+def _send_single_webhook_sync(
+    endpoint: WebhookEndpoint, payload_to_send: dict, url_extension: str | None
+) -> RequestData | None:
+    """Synchronous wrapper around _send_single_webhook for use in Celery tasks."""
+
+    async def _run():
+        async with AsyncClient() as client:
+            return await _send_single_webhook(client, endpoint, payload_to_send, url_extension)
+
+    return asyncio.run(_run())
+
+
+def _process_response(request_data: RequestData) -> tuple[WebhookLog, bool]:
+    """Convert a RequestData into a WebhookLog and return whether it's retryable.
+
+    Returns (log, retryable).
+    """
+    if not request_data.successful_response:
+        app_logger.info('No response from endpoint %s', request_data.endpoint_id)
+    return _request_data_to_log(request_data), _is_retryable(request_data)
 
 
 async def _async_post_webhooks(endpoints, url_extension, payload):
+    """Fan out a payload to all endpoints concurrently and return delivery results.
+
+    Each multi-event payload is split into one request per event before sending
+    (see `_split_payloads`). Returns (webhook_logs, total_success, total_failed,
+    retry_list) where retry_list is a list of (endpoint_id, payload_str,
+    url_extension) tuples for retryable failures.
+    """
     webhook_logs = []
     total_success, total_failed = 0, 0
-    # Temporary fix for the issue with the number of connections caused by a certain client
+    retry_list = []  # (endpoint_id, payload_str, url_extension)
     limits = httpx.Limits(max_connections=settings.webhook_http_max_connections)
     loaded_payload = json.loads(payload)
 
     async with AsyncClient(limits=limits) as client:
-        tasks = []
-        task_endpoints = []
-        for endpoint in endpoints:
-            # Check if the webhook URL is valid
-            if not endpoint.webhook_url.startswith(acceptable_url_schemes):
-                app_logger.error(
-                    'Webhook URL does not start with an acceptable url scheme: %s (%s)',
-                    endpoint.webhook_url,
-                    endpoint.id,
-                )
+        coros = [
+            _send_single_webhook(client, endpoint, payload_to_send, url_extension)
+            for endpoint in endpoints
+            for payload_to_send in _split_payloads(loaded_payload)
+        ]
+        webhook_responses = await asyncio.gather(*coros, return_exceptions=True)
+        for response in webhook_responses:
+            if response is None:
                 continue
-            url = endpoint.webhook_url
-            if url_extension:
-                url += f'/{url_extension}'
 
-            events = loaded_payload.get('events')
-            if events is not None:
-                payloads_to_send = []
-                for event in events:
-                    # for batched events requests from TC2 we want to split each action event
-                    # into their individual requests to the downstream endpoint. This is done for reverse compability
-                    # with zapier and other client integration
-
-                    # looks like for PR #120 we should keep this code as it is because on deployment, the task queue will still have
-                    # payloads of the old consolidated type which require to be split or there may be a bunch of Zapier errors.
-
-                    # TODO: remove the splitting logic here after Issue #119 fix is deployed
-                    single_event_payload = copy.deepcopy({k: v for k, v in loaded_payload.items() if k != 'events'})
-                    single_event_payload['events'] = [copy.deepcopy(event)]
-                    payloads_to_send.append(single_event_payload)
-            else:
-                payloads_to_send = [copy.deepcopy(loaded_payload)]
-            for payload_to_send in payloads_to_send:
-                body = json.dumps(payload_to_send).encode()
-                sig = hmac.new(endpoint.api_key.encode(), body, hashlib.sha256)
-                task = asyncio.ensure_future(
-                    webhook_request(client, url, endpoint.id, body=body, webhook_sig=sig.hexdigest())
-                )
-                tasks.append(task)
-                task_endpoints.append((endpoint.id, url))
-        webhook_responses = await asyncio.gather(*tasks, return_exceptions=True)
-        # webhook responses and tasks endpoints are in task creation order.
-        # zip gives the matching endpoint id url for each result, including exceptions.
-        for response, (endpoint_id, endpoint_url) in zip(webhook_responses, task_endpoints):
             if not isinstance(response, RequestData):
-                app_logger.info('No response from endpoint %s: %s. %s', endpoint_id, endpoint_url, response)
+                app_logger.info('Unexpected error sending webhook: %s', response)
+                total_failed += 1
                 continue
-            elif not response.successful_response:
-                app_logger.info('No response from endpoint %s: %s', response.endpoint_id, endpoint_url)
 
-            if response.status_code in {200, 201, 202, 204}:
-                status = 'Success'
+            log, retryable = _process_response(response)
+            webhook_logs.append(log)
+            if _is_success(response):
                 total_success += 1
             else:
-                status = 'Unexpected response'
                 total_failed += 1
+            if retryable:
+                retry_list.append((response.endpoint_id, response.request_body, url_extension))
+    return webhook_logs, total_success, total_failed, retry_list
 
-            # Log the response
-            webhook_logs.append(
-                WebhookLog(
-                    webhook_endpoint_id=response.endpoint_id,
-                    request_headers=response.request_headers,
-                    request_body=response.request_body,
-                    response_headers=response.response_headers,
-                    response_body=response.response_body,
-                    status=status,
-                    status_code=response.status_code,
-                )
-            )
-    return webhook_logs, total_success, total_failed
+
+def _webhook_host_is_exempt_from_auto_disable(webhook_url: str) -> bool:
+    """True if the webhook target is a TutorCruncher first-party host (never auto-disabled)."""
+    parsed = urlparse(webhook_url)
+    host = (parsed.hostname or '').lower()
+    if not host:
+        return False
+    return host == 'tutorcruncher.com' or host.endswith('.tutorcruncher.com')
+
+
+def _notify_endpoint_disabled(
+    tc_id: int,
+    branch_id: int,
+    name: str,
+    webhook_url: str,
+    failure_count: int,
+    total_attempts: int,
+    window_minutes: int,
+) -> None:
+    """POST to TC2 when an endpoint is auto-disabled. Logs errors but does not raise."""
+    url = settings.tc2_endpoint_disabled_url
+    if not url:
+        return
+    payload = {
+        'tc_id': tc_id,
+        'branch_id': branch_id,
+        'name': name,
+        'webhook_url': webhook_url,
+        'failure_count': failure_count,
+        'total_attempts': total_attempts,
+        'window_minutes': window_minutes,
+        'reason': 'too_many_failures',
+    }
+    headers = {'Authorization': f'Bearer {settings.tc2_shared_key}', 'Content-Type': 'application/json'}
+    try:
+        r = httpx.post(url, json=payload, headers=headers, timeout=10.0)
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        app_logger.warning('TC2 endpoint-disabled callback returned %s: %s', e.response.status_code, e.response.text)
+    except Exception as e:
+        app_logger.exception('Failed to notify TC2 of disabled endpoint: %s', e)
+
+
+def _check_and_disable_endpoint_if_needed(db: Session, endpoint: WebhookEndpoint) -> None:
+    """If endpoint has >threshold failure rate in the window with min attempts, set active=False and notify TC2."""
+    if not endpoint.active:
+        return
+    if _webhook_host_is_exempt_from_auto_disable(endpoint.webhook_url):
+        return
+    window_start = datetime.now(UTC) - timedelta(minutes=settings.webhook_disable_failure_window_minutes)
+    # Count total and failures in window
+    total = db.exec(
+        select(func.count())
+        .select_from(WebhookLog)
+        .where(WebhookLog.webhook_endpoint_id == endpoint.id, WebhookLog.timestamp >= window_start)
+    ).one()
+    failures = db.exec(
+        select(func.count())
+        .select_from(WebhookLog)
+        .where(
+            WebhookLog.webhook_endpoint_id == endpoint.id,
+            WebhookLog.timestamp >= window_start,
+            WebhookLog.status != WebhookStatus.SUCCESS,
+        )
+    ).one()
+    if total < settings.webhook_disable_min_attempts:
+        return
+    failure_rate = failures / total
+    if failure_rate <= settings.webhook_disable_failure_rate_threshold:
+        return
+    endpoint.active = False
+    app_logger.info(
+        'Auto-disabled endpoint %s (tc_id=%s): failure rate %.1f%% (%s/%s) in last %s minutes',
+        endpoint.name,
+        endpoint.tc_id,
+        failure_rate * 100,
+        failures,
+        total,
+        settings.webhook_disable_failure_window_minutes,
+    )
+    _notify_endpoint_disabled(
+        endpoint.tc_id,
+        endpoint.branch_id,
+        endpoint.name,
+        endpoint.webhook_url,
+        failure_count=failures,
+        total_attempts=total,
+        window_minutes=settings.webhook_disable_failure_window_minutes,
+    )
 
 
 @celery_app.task(
@@ -200,10 +387,58 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     retry_kwargs={'max_retries': 3},
     retry_backoff=True,
 )
-def task_send_webhooks(
+def task_retry_single_webhook(
+    endpoint_id: int,
     payload: str,
-    url_extension: str = None,
+    url_extension: str | None = None,
+    attempt: int = 1,
 ):
+    """
+    One-attempt retry for a single endpoint. Re-enqueues itself with backoff
+    while the failure is retryable and we have retries remaining.
+    """
+    with Session(engine) as db:
+        endpoint = db.get(WebhookEndpoint, endpoint_id)
+        if not endpoint or not endpoint.active:
+            return
+
+        request_data = _send_single_webhook_sync(endpoint, json.loads(payload), url_extension)
+        if request_data is None:
+            return
+
+        log, retryable = _process_response(request_data)
+        db.add(log)
+        db.commit()
+
+        if not _is_success(request_data):
+            _check_and_disable_endpoint_if_needed(db, endpoint)
+            db.commit()
+
+        should_retry = retryable and endpoint.active and attempt < settings.webhook_retry_max_attempts
+
+        if should_retry:
+            # here task_send_webhooks enqueues the first retry with countdown base,
+            # so the exponent here starts at attempt to continue the series as base, base*10, base*100, ...
+            next_delay = settings.webhook_retry_backoff_base_seconds * (
+                settings.webhook_retry_backoff_multiplier ** attempt
+            )
+            next_delay = max(0, int(next_delay))
+            task_retry_single_webhook.apply_async(
+                args=[endpoint_id, payload],
+                kwargs={'url_extension': url_extension, 'attempt': attempt + 1},
+                countdown=next_delay,
+            )
+            app_logger.info(
+                'Re-queued retry for endpoint %s in %s s (attempt %s)', endpoint_id, next_delay, attempt + 1
+            )
+
+
+@celery_app.task(
+    autoretry_for=(redis.exceptions.ConnectionError, redis.exceptions.TimeoutError),
+    retry_kwargs={'max_retries': 3},
+    retry_backoff=True,
+)
+def task_send_webhooks(payload: str, url_extension: str = None):
     """
     Send the webhook to the relevant endpoints
     """
@@ -229,11 +464,28 @@ def task_send_webhooks(
             )
             endpoints = db.exec(endpoints_query).all()
 
-            webhook_logs, total_success, total_failed = asyncio.run(
+            webhook_logs, total_success, total_failed, retry_list = asyncio.run(
                 _async_post_webhooks(endpoints, url_extension, payload)
             )
             for webhook_log in webhook_logs:
                 db.add(webhook_log)
+            db.commit()
+
+            # Enqueue retries (non-blocking)
+            for endpoint_id, payload_str, url_ext in retry_list:
+                task_retry_single_webhook.apply_async(
+                    args=[endpoint_id, payload_str],
+                    kwargs={'url_extension': url_ext, 'attempt': 1},
+                    countdown=settings.webhook_retry_backoff_base_seconds,
+                )
+
+            # Disable endpoints that exceed failure rate threshold
+            endpoint_ids_with_failures = {
+                log.webhook_endpoint_id for log in webhook_logs if log.status != WebhookStatus.SUCCESS
+            }
+            for endpoint in endpoints:
+                if endpoint.id in endpoint_ids_with_failures:
+                    _check_and_disable_endpoint_if_needed(db, endpoint)
             db.commit()
     app_logger.info(
         '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
@@ -273,12 +525,9 @@ def get_count(date_to_delete_before: datetime) -> int:
     Get the count of all logs
     """
     with Session(engine) as db:
-        count = (
-            db.query(WebhookLog)
-            .with_entities(func.count())
-            .where(WebhookLog.timestamp < date_to_delete_before)
-            .scalar()
-        )
+        count = db.exec(
+            select(func.count()).select_from(WebhookLog).where(WebhookLog.timestamp < date_to_delete_before)
+        ).one()
     return count
 
 
@@ -350,7 +599,7 @@ def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
     """
     Dispatches a task to per branch queue for fair round robin processing.
 
-    For poyloads with N events, split such that:
+    For payloads with N events, split such that:
     P({e1, e2, ..., eN}) -> [P({e1}), P({e2}), ..., P({eN})]
     """
     payload = kwargs.pop('payload', None)
@@ -358,19 +607,9 @@ def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
     if not payload:
         return
 
-    events = payload.get('events')
-    if not events:
-        # Non event payloads like TCPublicProfileWebhook enqueue as it is
-        job_queue.enqueue(task.name, branch_id=branch_id, payload=json.dumps(payload), url_extension=url_extension)
-        return
-
-    request_time = payload['request_time']
-    for event in events:
+    for single_payload in _split_payloads(payload):
         job_queue.enqueue(
-            task.name,
-            branch_id=branch_id,
-            payload=json.dumps({'events': [event], 'request_time': request_time}),
-            url_extension=url_extension,
+            task.name, branch_id=branch_id, payload=json.dumps(single_payload), url_extension=url_extension
         )
 
 
