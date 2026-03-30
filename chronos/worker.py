@@ -575,7 +575,7 @@ def _delete_old_logs_job():
     # with logfire.span('Started to delete old logs'):
     with Session(engine) as db:
         # Get all logs older than 15 days
-        date_to_delete_before = datetime.now(UTC) - timedelta(days=15)
+        date_to_delete_before = datetime.utcnow() - timedelta(days=15)
         count = get_count(date_to_delete_before)
         delete_limit = WEBHOOK_LOG_DELETE_BATCH_SIZE
         while count > 0:
