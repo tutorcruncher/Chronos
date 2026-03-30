@@ -311,6 +311,30 @@ def test_retry_task_nonretryable_400_no_reenqueue(app_db: Session):
 
 
 @respx.mock
+def test_retry_countdown_values_match_backoff_formula(app_db: Session):
+    """Verify the countdown argument to apply_async follows base * multiplier^attempt."""
+    ep = _create_endpoint(app_db, tc_id=113)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+    payload_str = json.dumps(get_dft_webhook_data())
+
+    base = settings.webhook_retry_backoff_base_seconds
+    mult = settings.webhook_retry_backoff_multiplier
+
+    # Initial retry enqueued from task_send_webhooks uses countdown=base
+    with patch.object(task_retry_single_webhook, 'apply_async') as mock_apply:
+        task_send_webhooks(payload=payload_str, url_extension=None)
+    assert mock_apply.called
+    assert mock_apply.call_args.kwargs['countdown'] == base
+
+    # Subsequent retries from task_retry_single_webhook use base * mult^attempt
+    for attempt in range(1, settings.webhook_retry_max_attempts):
+        with patch.object(task_retry_single_webhook, 'apply_async') as mock_apply:
+            task_retry_single_webhook(ep.id, payload_str, url_extension=None, attempt=attempt)
+        expected_countdown = max(0, int(base * (mult**attempt)))
+        assert mock_apply.call_args.kwargs['countdown'] == expected_countdown
+
+
+@respx.mock
 def test_queue_too_long_warning(client: TestClient, app_db: Session):
     """When Celery queue length exceeds threshold, app_logger.error is called."""
     ep = _create_endpoint(app_db, tc_id=108)

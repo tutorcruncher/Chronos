@@ -339,6 +339,86 @@ def test_disable_skipped_for_tutorcruncher_mixed_case_host_e2e(client: TestClien
     assert not mock_notify.called
 
 
+@respx.mock
+def test_disable_during_retry_stops_chain(client: TestClient, app_db: Session):
+    """Endpoint disabled by _check_and_disable_endpoint_if_needed on the same attempt -> no re-enqueue."""
+    ep = _create_endpoint(app_db, tc_id=215)
+    # 9 existing failures + 1 from this attempt = 10 total, 100% failure rate -> disable triggers
+    _add_logs(app_db, ep.id, count=9, failure_count=9)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+    payload_str = json.dumps(get_dft_webhook_data(branch_id=199))
+
+    with patch.object(task_retry_single_webhook, 'apply_async') as mock_apply:
+        task_retry_single_webhook(ep.id, payload_str, url_extension=None, attempt=1)
+
+    # Endpoint was disabled so retry chain should stop even though attempt < max_attempts
+    assert not mock_apply.called
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+
+
+@respx.mock
+def test_disable_not_triggered_at_exact_threshold_boundary(client: TestClient, app_db: Session):
+    """Exactly 20% failure rate (2/10) does NOT trigger disable because the check uses <=."""
+    ep = _create_endpoint(app_db, tc_id=216)
+    # 9 logs: 1 failure + 8 success. One more failure from this send = 2/10 = exactly 20%.
+    _add_logs(app_db, ep.id, count=9, failure_count=1)
+    respx.post(ep.webhook_url).mock(return_value=httpx.Response(503))
+
+    with patch.object(settings, 'tc2_endpoint_disabled_url', 'https://tc2.example.com/disabled'):
+        mock_notify = respx.post('https://tc2.example.com/disabled')
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is True
+    assert not mock_notify.called
+
+
+def test_disable_ignores_failures_outside_window(client: TestClient, app_db: Session):
+    """Failures older than the window are excluded from the failure rate calculation."""
+    from sqlmodel import Session as DbSession
+
+    from chronos.db import engine
+    from chronos.worker import _check_and_disable_endpoint_if_needed
+
+    ep = _create_endpoint(app_db, tc_id=217)
+    now_naive = datetime.utcnow()
+    window_minutes = settings.webhook_disable_failure_window_minutes
+
+    # 15 old failures well outside the window — should be ignored
+    for _ in range(15):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=ep.id,
+                status=WebhookStatus.UNEXPECTED_RESPONSE,
+                status_code=503,
+                timestamp=now_naive - timedelta(minutes=window_minutes + 30),
+            )
+        )
+    # 10 recent successes inside the window — 0% failure rate
+    for _ in range(10):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=ep.id,
+                status=WebhookStatus.SUCCESS,
+                status_code=200,
+                timestamp=now_naive - timedelta(minutes=1),
+            )
+        )
+    app_db.commit()
+
+    with DbSession(engine) as db:
+        ep_in_session = db.get(WebhookEndpoint, ep.id)
+        _check_and_disable_endpoint_if_needed(db, ep_in_session)
+        db.commit()
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is True
+
+
 def test_disable_check_uses_naive_utc_timestamps(client: TestClient, app_db: Session):
     """Regression: _check_and_disable_endpoint_if_needed must use naive UTC datetimes.
 
