@@ -410,7 +410,5 @@ def test_delete_old_logs_uses_naive_utc_timestamps(client: TestClient, app_db: S
     _delete_old_logs_job()
 
     app_db.expire_all()
-    remaining = app_db.exec(
-        select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)
-    ).all()
+    remaining = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
     assert len(remaining) == 5
