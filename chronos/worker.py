@@ -420,7 +420,7 @@ def task_retry_single_webhook(
             # here task_send_webhooks enqueues the first retry with countdown base,
             # so the exponent here starts at attempt to continue the series as base, base*10, base*100, ...
             next_delay = settings.webhook_retry_backoff_base_seconds * (
-                settings.webhook_retry_backoff_multiplier ** attempt
+                settings.webhook_retry_backoff_multiplier**attempt
             )
             next_delay = max(0, int(next_delay))
             task_retry_single_webhook.apply_async(
