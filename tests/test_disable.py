@@ -1,7 +1,7 @@
 """End-to-end tests for webhook endpoint disable-on-failure and TC2 notification."""
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import httpx
@@ -58,7 +58,7 @@ def _create_endpoint(app_db: Session, branch_id: int = 199, active: bool = True,
 
 def _add_logs(app_db: Session, endpoint_id: int, count: int, failure_count: int, minutes_ago: int = 0):
     """Add count logs, failure_count of them with status != Success, with timestamp in window."""
-    base_ts = datetime.now(UTC) - timedelta(minutes=minutes_ago or 1)
+    base_ts = datetime.utcnow() - timedelta(minutes=minutes_ago or 1)
     for _ in range(failure_count):
         app_db.add(
             create_webhook_log_from_dft_data(
@@ -337,3 +337,80 @@ def test_disable_skipped_for_tutorcruncher_mixed_case_host_e2e(client: TestClien
     app_db.refresh(ep)
     assert ep.active is True
     assert not mock_notify.called
+
+
+def test_disable_check_uses_naive_utc_timestamps(client: TestClient, app_db: Session):
+    """Regression: _check_and_disable_endpoint_if_needed must use naive UTC datetimes.
+
+    WebhookLog.timestamp is 'timestamp without time zone' (naive UTC). If the window
+    query uses a timezone-aware datetime, PostgreSQL converts the naive column values
+    via the session timezone (e.g. Europe/London = BST = UTC+1), shifting them and
+    causing the count to return 0 — silently skipping the disable.
+    """
+    from sqlalchemy import text
+    from sqlmodel import Session as DbSession
+
+    from chronos.db import engine
+    from chronos.worker import _check_and_disable_endpoint_if_needed
+
+    ep = _create_endpoint(app_db, tc_id=220)
+    now_naive = datetime.utcnow()
+    for _ in range(10):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=ep.id,
+                status=WebhookStatus.UNEXPECTED_RESPONSE,
+                status_code=503,
+                timestamp=now_naive - timedelta(minutes=1),
+            )
+        )
+    app_db.commit()
+
+    # Set a non-UTC session timezone so the bug surfaces if the code
+    # uses timezone-aware datetimes in the window query.
+    with DbSession(engine) as db:
+        db.exec(text("SET LOCAL timezone = 'Pacific/Auckland'"))
+        ep_in_session = db.get(WebhookEndpoint, ep.id)
+        _check_and_disable_endpoint_if_needed(db, ep_in_session)
+        db.commit()
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+
+
+def test_delete_old_logs_uses_naive_utc_timestamps(client: TestClient, app_db: Session):
+    """Regression: _delete_old_logs_job must use naive UTC datetimes.
+
+    Same root cause as the disable check: if the delete cutoff is timezone-aware,
+    PostgreSQL interprets the naive column values in the session timezone and the
+    comparison is off by the UTC offset.
+    """
+    from chronos.worker import _delete_old_logs_job
+
+    ep = _create_endpoint(app_db, tc_id=221)
+    now_naive = datetime.utcnow()
+    # 5 logs from 16 days ago (should be deleted) and 5 from 1 day ago (should be kept)
+    for _ in range(5):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=ep.id,
+                timestamp=now_naive - timedelta(days=16),
+            )
+        )
+    for _ in range(5):
+        app_db.add(
+            create_webhook_log_from_dft_data(
+                webhook_endpoint_id=ep.id,
+                timestamp=now_naive - timedelta(days=1),
+            )
+        )
+    app_db.commit()
+
+    _delete_old_logs_job()
+
+    app_db.expire_all()
+    remaining = app_db.exec(
+        select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)
+    ).all()
+    assert len(remaining) == 5
