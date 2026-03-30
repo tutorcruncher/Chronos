@@ -340,7 +340,7 @@ def _check_and_disable_endpoint_if_needed(db: Session, endpoint: WebhookEndpoint
         return
     if _webhook_host_is_exempt_from_auto_disable(endpoint.webhook_url):
         return
-    window_start = datetime.now(UTC) - timedelta(minutes=settings.webhook_disable_failure_window_minutes)
+    window_start = datetime.utcnow() - timedelta(minutes=settings.webhook_disable_failure_window_minutes)
     # Count total and failures in window
     total = db.exec(
         select(func.count())
