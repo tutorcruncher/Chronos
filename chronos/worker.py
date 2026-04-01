@@ -293,12 +293,13 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
 
 
 def _webhook_host_is_exempt_from_auto_disable(webhook_url: str) -> bool:
-    """True if the webhook target is a TutorCruncher first-party host (never auto-disabled)."""
+    """True if the webhook target matches an exempt host (never auto-disabled)."""
     parsed = urlparse(webhook_url)
     host = (parsed.hostname or '').lower()
     if not host:
         return False
-    return host == 'tutorcruncher.com' or host.endswith('.tutorcruncher.com')
+    exempt_hosts = [h.strip().lower() for h in settings.webhook_disable_exempt_hosts.split(',') if h.strip()]
+    return any(host == eh or host.endswith(f'.{eh}') for eh in exempt_hosts)
 
 
 def _notify_endpoint_disabled(

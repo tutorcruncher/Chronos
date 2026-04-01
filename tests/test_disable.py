@@ -13,7 +13,7 @@ from sqlmodel import Session, select
 
 from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.utils import settings
-from chronos.worker import task_retry_single_webhook, task_send_webhooks
+from chronos.worker import _webhook_host_is_exempt_from_auto_disable, task_retry_single_webhook, task_send_webhooks
 from tests.test_helpers import (
     create_webhook_log_from_dft_data,
     get_dft_webhook_data,
@@ -492,3 +492,56 @@ def test_delete_old_logs_uses_naive_utc_timestamps(client: TestClient, app_db: S
     app_db.expire_all()
     remaining = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
     assert len(remaining) == 5
+
+
+def test_exempt_hosts_from_env_var():
+    """default exempt hosts setting covers tutorcruncher.com and subdomains."""
+    with patch.object(settings, 'webhook_disable_exempt_hosts', 'tutorcruncher.com'):
+        assert _webhook_host_is_exempt_from_auto_disable('https://tutorcruncher.com/webhook')
+        assert _webhook_host_is_exempt_from_auto_disable('https://hooks.tutorcruncher.com/inbound')
+        assert _webhook_host_is_exempt_from_auto_disable('https://HOOKS.TUTORCRUNCHER.COM/inbound')
+        assert not _webhook_host_is_exempt_from_auto_disable('https://fake-tutorcruncher.com/hook')
+        assert not _webhook_host_is_exempt_from_auto_disable('https://example.com/webhook')
+        assert not _webhook_host_is_exempt_from_auto_disable('https:///webhook')
+
+
+@respx.mock
+def test_exempt_hosts_multiple_entries_e2e(client: TestClient, app_db: Session):
+    """Comma-separated exempt hosts: custom host is also exempt from auto-disable."""
+    custom_url = 'https://api.example.org/hook'
+    ep = _create_endpoint(app_db, tc_id=220, webhook_url=custom_url)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(custom_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2.example.com/disabled'
+    with (
+        patch.object(settings, 'webhook_disable_exempt_hosts', 'tutorcruncher.com, example.org'),
+        patch.object(settings, 'tc2_endpoint_disabled_url', notify_url),
+    ):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is True
+    assert not mock_notify.called
+
+
+@respx.mock
+def test_exempt_hosts_empty_disables_all_e2e(client: TestClient, app_db: Session):
+    """Empty exempt hosts means even tutorcruncher.com endpoints can be disabled."""
+    tc_url = 'https://hooks.tutorcruncher.com/inbound'
+    ep = _create_endpoint(app_db, tc_id=221, webhook_url=tc_url)
+    _add_logs(app_db, ep.id, count=10, failure_count=3)
+    respx.post(tc_url).mock(return_value=httpx.Response(503))
+    notify_url = 'https://tc2.example.com/disabled'
+    with (
+        patch.object(settings, 'webhook_disable_exempt_hosts', ''),
+        patch.object(settings, 'tc2_endpoint_disabled_url', notify_url),
+    ):
+        mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+        task_send_webhooks(payload=json.dumps(get_dft_webhook_data(branch_id=199)), url_extension=None)
+
+    app_db.expire_all()
+    app_db.refresh(ep)
+    assert ep.active is False
+    assert mock_notify.called

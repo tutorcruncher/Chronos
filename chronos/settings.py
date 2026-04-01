@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     webhook_disable_min_attempts: int = 10
     webhook_disable_failure_window_minutes: int = 60
     tc2_endpoint_disabled_url: Optional[str] = None  # POST here when endpoint auto-disabled
+    webhook_disable_exempt_hosts: str = 'tutorcruncher.com'  # comma-separated hosts exempt from auto-disable
 
     # Read local env file for local variables
     model_config = SettingsConfigDict(env_file='.env', extra='allow')
