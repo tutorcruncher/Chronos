@@ -614,7 +614,7 @@ def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
         )
 
 
-@celery_app.task(name='job_dispatcher', acks_late=False)
+@celery_app.task(name='job_dispatcher', acks_late=False, trail=False)
 def job_dispatcher_task(
     max_celery_queue: int = settings.dispatcher_max_celery_queue,
     cycle_delay: float = settings.dispatcher_cycle_delay_seconds,  # at most the webhooks need to wait for 10ms
@@ -631,6 +631,12 @@ def job_dispatcher_task(
     the Redis broker's visibility_timeout (default 1 hour) would redeliver
     the unacked task, spawning a DUPLICATE dispatcher. Setting acks_late=False
     acks the task immediately on receipt, preventing redelivery.
+
+    CRITICAL NOTE: trail=False stops Celery from appending each dispatched
+    task's AsyncResult to self.request.children inside Task.add_trail. Because
+    this task runs forever, that list would grow unbounded — one entry per
+    apply_async call from dispatch_cycle — and leak memory linearly with
+    dispatch volume. See celery/app/base.py send_task() and Task.add_trail().
     """
     from billiard.exceptions import SoftTimeLimitExceeded
 
