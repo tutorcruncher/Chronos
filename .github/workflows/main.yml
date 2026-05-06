@@ -68,3 +68,4 @@ jobs:
         run: |
           curl ${{ secrets.RENDER_DEPLOY_HOOK_URL_WEB }}
           curl ${{ secrets.RENDER_DEPLOY_HOOK_URL_WORKER }}
+          curl ${{ secrets.RENDER_DEPLOY_HOOK_URL_DISPATCHER }}
