@@ -1,20 +1,19 @@
-import logging.config
+import logging
 import os
 
-import sentry_sdk
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from chronos.logging import config
+from chronos.logging import setup_logging
+from chronos.observability import init_sentry
 from chronos.utils import settings as _app_settings
-from chronos.views import main_router
-from chronos.worker import cronjob, lifespan
+
+init_sentry(for_celery_worker=False)
+
+from chronos.views import main_router  # noqa: E402
+from chronos.worker import cronjob, lifespan  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if _app_settings.sentry_dsn:
-    sentry_sdk.init(
-        dsn=_app_settings.sentry_dsn,
-    )
 
 app = FastAPI(lifespan=lifespan)
 
@@ -34,7 +33,7 @@ if bool(_app_settings.logfire_token):
 
     instrument_web_app(app)
 
-logging.config.dictConfig(config)
+setup_logging()
 # Remove excessive sqlalchemy logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 logging.getLogger('sqlalchemy.engine.Engine').disabled = True
