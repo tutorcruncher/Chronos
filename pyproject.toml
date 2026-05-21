@@ -66,4 +66,4 @@ dev = [
 
 [tool.logfire]
     ignore_no_config = true
-    pydantic_plugin_record = "all"
+    pydantic_plugin_record = "failure"
