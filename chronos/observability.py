@@ -26,19 +26,33 @@ def _attach_logfire_handler():
     """Bridge Python stdlib logging to Logfire for the 'chronos' logger tree.
 
     Sets the logger level to INFO so Celery's --loglevel=error on the root
-    logger does not filter records before they reach any handler. To avoid
-    flooding stderr with INFO in production (where the StreamHandler from
-    dictConfig expects the level set by settings.log_level), the existing
-    stderr handlers are given an explicit level matching the configured one.
+    logger does not filter records before they reach any handler.
+
+    In the web process, dictConfig has already installed a StreamHandler and
+    set propagate=False.  In worker processes dictConfig never runs, so
+    propagate defaults to True and there are no handlers — without the guard
+    below, every INFO record would propagate to Celery's root StreamHandler
+    (which has level=NOTSET) and flood production stderr.
     """
     chronos_logger = logging.getLogger('chronos')
-    for h in chronos_logger.handlers:
-        if h.level == logging.NOTSET:
-            h.setLevel(settings.log_level.upper())
+
+    if not chronos_logger.handlers:
+        # Worker process: add a stderr handler at the configured level so
+        # ERROR+ operational logs still appear on the console.
+        stderr_handler = logging.StreamHandler()
+        stderr_handler.setLevel(settings.log_level.upper())
+        chronos_logger.addHandler(stderr_handler)
+    else:
+        # Web process: dictConfig installed a StreamHandler with level=NOTSET.
+        # Pin it to the configured level so lowering the logger to INFO below
+        # doesn't flood stderr.
+        for h in chronos_logger.handlers:
+            if h.level == logging.NOTSET and not isinstance(h, LogfireLoggingHandler):
+                h.setLevel(settings.log_level.upper())
+
     chronos_logger.setLevel(logging.INFO)
-    # Guard against duplicate handlers: instrument_worker() and instrument_web_app()
-    # can both call this, and Celery's prefork pool may fire worker_process_init
-    # more than once in edge cases (e.g. pool restart).
+    chronos_logger.propagate = False
+
     if not any(isinstance(h, LogfireLoggingHandler) for h in chronos_logger.handlers):
         chronos_logger.addHandler(LogfireLoggingHandler())
 
