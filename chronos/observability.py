@@ -1,4 +1,7 @@
+import logging
+
 import logfire
+from logfire.integrations.logging import LogfireLoggingHandler
 
 from chronos.utils import settings
 
@@ -19,18 +22,30 @@ def configure_logfire():
     _configured = True
 
 
+def _attach_logfire_handler():
+    """Bridge Python stdlib logging to Logfire for the 'chronos' logger tree.
+
+    Sets an explicit level so Celery's --loglevel=error on the root logger
+    does not filter out INFO/WARNING records before they reach the handler.
+    """
+    chronos_logger = logging.getLogger('chronos')
+    chronos_logger.setLevel(logging.INFO)
+    if not any(isinstance(h, LogfireLoggingHandler) for h in chronos_logger.handlers):
+        chronos_logger.addHandler(LogfireLoggingHandler())
+
+
 def instrument_worker():
     configure_logfire()
+    _attach_logfire_handler()
     logfire.instrument_celery()
-    logfire.instrument_pydantic(record=settings.logfire_log_level)
+    logfire.instrument_httpx()
     logfire.instrument_psycopg()
-    logfire.instrument_requests()
 
 
 def instrument_web_app(app):
     configure_logfire()
+    _attach_logfire_handler()
     logfire.instrument_fastapi(app)
     logfire.instrument_celery()
-    logfire.instrument_pydantic(record=settings.logfire_log_level)
+    logfire.instrument_httpx()
     logfire.instrument_psycopg()
-    logfire.instrument_requests()
