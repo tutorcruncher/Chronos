@@ -29,14 +29,14 @@ if _app_settings.dev_mode:
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=['*'], allow_headers=['*'])
 
 
-if bool(_app_settings.logfire_token):
-    from chronos.observability import instrument_web_app
-
-    instrument_web_app(app)
-
 logging.config.dictConfig(config)
 # Remove excessive sqlalchemy logging
 logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 logging.getLogger('sqlalchemy.engine.Engine').disabled = True
+
+if bool(_app_settings.logfire_token):
+    from chronos.observability import instrument_web_app
+
+    instrument_web_app(app)
 app.include_router(main_router, prefix='')
 app.include_router(cronjob, prefix='')

@@ -69,13 +69,14 @@ def init_worker_process(**kwargs):
     This ensures each worker gets fresh connections instead of inheriting
     stale connections from the parent process, preventing SSL SYSCALL errors.
     """
-    app_logger.info('Disposing database engine pool for worker process')
     engine.dispose()
 
     from chronos.observability import instrument_worker
 
     if bool(settings.logfire_token):
         instrument_worker()
+
+    app_logger.info('Worker process initialised, database engine pool disposed')
 
 
 async def webhook_request(
