@@ -21,7 +21,7 @@ app = FastAPI(lifespan=lifespan)
 if _app_settings.on_beta:
     allowed_origins = ['https://beta.tutorcruncher.com']
 else:
-    allowed_origins = ['https://secure.tutorcruncher.com']
+    allowed_origins = ['https://secure.tutorcruncher.com', 'https://app.tutorcruncher.com']
 
 if _app_settings.dev_mode:
     allowed_origins = ['*']
