@@ -8,7 +8,8 @@ import httpx
 import pytest
 import respx as respx
 from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel, col, select
+from sqlalchemy import delete
+from sqlmodel import Session, col, select
 
 from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.worker import _delete_old_logs_job, task_delete_endpoint, task_send_webhooks
@@ -25,15 +26,18 @@ from tests.test_helpers import (
 
 class TestWorkers:
     @pytest.fixture
-    def create_tables(self, engine):
-        SQLModel.metadata.create_all(engine)
-        yield
-        SQLModel.metadata.drop_all(engine)
-
-    @pytest.fixture
     def db(self, engine, create_tables):
+        """Plain session on the shared (session-scoped) engine; the real Celery tasks commit here.
+
+        Clean up the rows on teardown rather than dropping the tables — these tests share the
+        session engine with the app_db-based files, so dropping the schema mid-session would
+        break every later test that relies on it.
+        """
         with Session(engine) as session:
             yield session
+            session.exec(delete(WebhookLog))
+            session.exec(delete(WebhookEndpoint))
+            session.commit()
 
     @pytest.fixture(autouse=True)
     def no_retry_enqueue(self):
@@ -129,11 +133,11 @@ class TestWorkers:
         endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 15
 
-        endpoints_1 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.branch_id == 99)).all()
+        endpoints_1 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.org_id == 99)).all()
         assert len(endpoints_1) == 5
-        endpoints_2 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.branch_id == 199)).all()
+        endpoints_2 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.org_id == 199)).all()
         assert len(endpoints_2) == 5
-        endpoints_3 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.branch_id == 299)).all()
+        endpoints_3 = db.exec(select(WebhookEndpoint).where(WebhookEndpoint.org_id == 299)).all()
         assert len(endpoints_3) == 5
 
         payload = get_dft_webhook_data()

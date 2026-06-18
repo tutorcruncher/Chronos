@@ -11,8 +11,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, or_
 from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog
-from chronos.worker import task_delete_endpoint, task_send_bobbin_webhooks, task_send_webhooks
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.utils import settings
+from chronos.worker import task_delete_endpoint, task_retry_single_webhook, task_send_webhooks
 from tests.test_helpers import (
     _get_bobbin_headers,
     _get_webhook_headers,
@@ -34,6 +35,12 @@ class TestBobbinWorkers:
     @pytest.fixture
     def db(self, app_db):
         return app_db
+
+    @pytest.fixture(autouse=True)
+    def no_retry_enqueue(self):
+        """Bobbin sends now share the TC2 retry path; suppress real enqueues during tests."""
+        with patch.object(task_retry_single_webhook, 'apply_async'):
+            yield
 
     @pytest.fixture(autouse=True)
     def cleanup_bobbin_data(self, app_db):
@@ -59,7 +66,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(payload, _get_bobbin_headers())
         )
 
-        task_send_bobbin_webhooks(json.dumps(payload), payload['organization_id'])
+        task_send_webhooks(json.dumps(payload))
 
         assert mock_request.called
         logs = _logs_for(db, ep_id)
@@ -83,7 +90,7 @@ class TestBobbinWorkers:
         db.commit()
         ep_ids = [ep.id for ep in eps]
 
-        task_send_bobbin_webhooks(json.dumps(payload), payload['organization_id'])
+        task_send_webhooks(json.dumps(payload))
 
         logs = db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_(ep_ids))).all()
         assert len(logs) == 5
@@ -105,7 +112,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(payload, _get_bobbin_headers())
         )
 
-        task_send_bobbin_webhooks(json.dumps(payload), 99)
+        task_send_webhooks(json.dumps(payload))
 
         assert mock_target.called
         assert not mock_other.called
@@ -131,7 +138,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(payload, _get_bobbin_headers())
         )
 
-        task_send_bobbin_webhooks(json.dumps(payload), payload['organization_id'])
+        task_send_webhooks(json.dumps(payload))
 
         assert mock_match.called
         assert not mock_miss.called
@@ -150,7 +157,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(payload, _get_bobbin_headers())
         )
 
-        task_send_bobbin_webhooks(json.dumps(payload), payload['organization_id'])
+        task_send_webhooks(json.dumps(payload))
 
         assert not mock_request.called
         assert not _logs_for(db, ep_id)
@@ -163,7 +170,7 @@ class TestBobbinWorkers:
         ep_id = ep.id
 
         payload = get_dft_bobbin_send_data()
-        task_send_bobbin_webhooks(json.dumps(payload), payload['organization_id'])
+        task_send_webhooks(json.dumps(payload))
 
         assert not _logs_for(db, ep_id)
 
@@ -177,7 +184,7 @@ class TestBobbinWorkers:
         payload = get_dft_bobbin_send_data()
         respx.post(ep.webhook_url).mock(return_value=get_failed_response(payload, _get_bobbin_headers()))
 
-        task_send_bobbin_webhooks(json.dumps(payload), payload['organization_id'])
+        task_send_webhooks(json.dumps(payload))
 
         logs = _logs_for(db, ep_id)
         assert len(logs) == 1
@@ -194,7 +201,7 @@ class TestBobbinWorkers:
         payload = get_dft_bobbin_send_data()
         respx.post(ep.webhook_url).mock(side_effect=httpx.TimeoutException(message='Timeout'))
 
-        task_send_bobbin_webhooks(json.dumps(payload), payload['organization_id'])
+        task_send_webhooks(json.dumps(payload))
 
         logs = _logs_for(db, ep_id)
         assert len(logs) == 1
@@ -221,7 +228,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(bobbin_payload, _get_webhook_headers())
         )
 
-        task_send_bobbin_webhooks(json.dumps(bobbin_payload), 5)
+        task_send_webhooks(json.dumps(bobbin_payload))
 
         assert mock_bobbin.called
         assert not mock_tc2.called
@@ -257,6 +264,39 @@ class TestBobbinWorkers:
         assert not _logs_for(db, ep_id)
 
     @respx.mock
+    def test_bobbin_endpoint_auto_disabled_and_notifies(self, db: Session, client: TestClient, celery_session_worker):
+        """Bobbin endpoints share the TC2 auto-disable path, posting to the Bobbin notify URL."""
+        ep = create_bobbin_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+        ep_id, ep_bobbin_id = ep.id, ep.bobbin_id
+
+        # 9 prior failures in the window; the send below makes 10/10 -> over threshold.
+        for _ in range(9):
+            db.add(
+                create_bobbin_webhook_log_from_dft_data(
+                    webhook_endpoint_id=ep_id, status=WebhookStatus.UNEXPECTED_RESPONSE, status_code=500
+                )
+            )
+        db.commit()
+
+        payload = get_dft_bobbin_send_data()
+        respx.post(ep.webhook_url).mock(return_value=get_failed_response(payload, _get_bobbin_headers()))
+        notify_url = 'https://bobbin.example.com/endpoint-disabled'
+        with patch.object(settings, 'bobbin_endpoint_disabled_url', notify_url):
+            mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
+            task_send_webhooks(json.dumps(payload))
+
+        db.expire_all()
+        assert db.get(WebhookEndpoint, ep_id).active is False
+        assert mock_notify.called
+        body = json.loads(mock_notify.calls[0].request.content)
+        assert body['bobbin_id'] == ep_bobbin_id
+        assert body['org_id'] == 99
+        assert body['reason'] == 'too_many_failures'
+        assert mock_notify.calls[0].request.headers['authorization'] == f'Bearer {settings.bobbin_shared_key}'
+
+    @respx.mock
     def test_send_bobbin_unexpected_error_logged(self, db: Session, client: TestClient, celery_session_worker):
         ep = create_bobbin_endpoint_from_dft_data()[0]
         db.add(ep)
@@ -265,6 +305,6 @@ class TestBobbinWorkers:
 
         payload = get_dft_bobbin_send_data()
         with patch('chronos.worker._send_single_webhook', side_effect=ValueError('boom')):
-            task_send_bobbin_webhooks(json.dumps(payload), payload['organization_id'])
+            task_send_webhooks(json.dumps(payload))
 
         assert not _logs_for(db, ep_id)

@@ -2,6 +2,8 @@ from typing import Any, Optional
 
 from pydantic import AliasChoices, BaseModel, Field
 
+from chronos.sql_models import Provider
+
 
 class TCIntegration(BaseModel):
     """
@@ -14,6 +16,18 @@ class TCIntegration(BaseModel):
     active: bool
     webhook_url: str
     api_key: str
+
+    def to_endpoint_fields(self) -> dict:
+        """Map the TC2 wire shape (branch_id) onto the shared WebhookEndpoint columns."""
+        return {
+            'provider': Provider.TC2,
+            'tc_id': self.tc_id,
+            'org_id': self.branch_id,
+            'name': self.name,
+            'active': self.active,
+            'webhook_url': self.webhook_url,
+            'api_key': self.api_key,
+        }
 
 
 class TCIntegrations(BaseModel):
@@ -81,12 +95,13 @@ class BobbinIntegration(BaseModel):
     def to_endpoint_fields(self) -> dict:
         """Map the bobbin-api wire shape onto the shared WebhookEndpoint columns.
 
-        Bobbin's organization_id is stored in branch_id and its endpoint id in bobbin_id;
-        tc_id stays NULL so this row is unambiguously a Bobbin endpoint.
+        Bobbin's organization_id is stored in org_id and its endpoint id in bobbin_id;
+        provider='bobbin' makes this row unambiguously a Bobbin endpoint.
         """
         return {
+            'provider': Provider.BOBBIN,
             'bobbin_id': self.bobbin_endpoint_id,
-            'branch_id': self.organization_id,
+            'org_id': self.organization_id,
             'name': self.name,
             'active': self.active,
             'webhook_url': self.webhook_url,

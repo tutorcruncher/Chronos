@@ -11,7 +11,7 @@ from chronos.pydantic_schema import BobbinDeleteIntegration, BobbinIntegrations,
 from chronos.sql_models import WebhookEndpoint
 from chronos.utils import settings
 from chronos.views.shared import check_authorisation, security, serialize_logs_response
-from chronos.worker import task_delete_endpoint, task_send_bobbin_webhooks
+from chronos.worker import task_delete_endpoint, task_send_webhooks
 
 bobbin_router = APIRouter(prefix='/bobbin')
 
@@ -27,7 +27,7 @@ def check_bobbin_authorisation(authorisation: HTTPAuthorizationCredentials) -> b
 def _get_bobbin_endpoint(db: Session, organization_id: int, bobbin_endpoint_id: int) -> WebhookEndpoint:
     """Resolve a Bobbin endpoint, scoped on (org, bobbin id). Raises NoResultFound if absent."""
     endpoint_qs = select(WebhookEndpoint).where(
-        WebhookEndpoint.branch_id == organization_id,
+        WebhookEndpoint.org_id == organization_id,
         WebhookEndpoint.bobbin_id == bobbin_endpoint_id,
     )
     return db.exec(endpoint_qs).one()
@@ -51,11 +51,11 @@ async def create_update_bobbin_endpoint(
             endpoint = WebhookEndpoint(**endpoint_fields)
             db.add(endpoint)
             db.commit()
-            created.append({'message': f'WebhookEndpoint {endpoint.name} (org: {endpoint.branch_id}) created'})
+            created.append({'message': f'WebhookEndpoint {endpoint.name} (org: {endpoint.org_id}) created'})
         else:
             endpoint.sqlmodel_update(endpoint_fields)
             db.commit()
-            updated.append({'message': f'WebhookEndpoint {endpoint.name} (org: {endpoint.branch_id}) updated'})
+            updated.append({'message': f'WebhookEndpoint {endpoint.name} (org: {endpoint.org_id}) updated'})
     return {'created': created, 'updated': updated}
 
 
@@ -79,7 +79,7 @@ async def delete_bobbin_endpoint(
     db.commit()
 
     task_delete_endpoint.delay(endpoint.id)
-    return {'message': f'WebhookEndpoint {endpoint.name} (org: {endpoint.branch_id}) deletion initiated'}
+    return {'message': f'WebhookEndpoint {endpoint.name} (org: {endpoint.org_id}) deletion initiated'}
 
 
 @bobbin_router.post('/send-webhook', description='Receive a Bobbin event and fan it out to the org endpoints')
@@ -87,9 +87,9 @@ async def send_bobbin_webhook(
     webhook: BobbinWebhookSend,
     authorisation: Annotated[HTTPAuthorizationCredentials, Depends(security)],
 ) -> dict:
-    """Queue a Bobbin event for delivery. No round-robin — a plain per-event Celery task."""
+    """Queue a Bobbin event for delivery via the shared send task (no round-robin)."""
     assert check_bobbin_authorisation(authorisation)
-    task_send_bobbin_webhooks.delay(json.dumps(webhook.model_dump()), webhook.organization_id)
+    task_send_webhooks.delay(json.dumps(webhook.model_dump()))
     return {'message': 'Sending bobbin webhook to endpoints has been successfully initiated.'}
 
 

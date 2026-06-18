@@ -61,22 +61,31 @@ To set up the Chronos system in render follow these steps:
 
 Chronos also serves the Bobbin (bobbin-api) product's outbound webhooks via the `/bobbin/*`
 routes (in `chronos/views/bobbin.py`). Bobbin shares TC2's `WebhookEndpoint` / `WebhookLog`
-tables rather than having its own: a Bobbin row stores its organization id in `branch_id`, its
-endpoint id in `bobbin_id`, and leaves `tc_id` NULL (TC2 rows are the mirror — `tc_id` set,
-`bobbin_id` NULL). The populated id column discriminates the two products, so a TC2 branch and a
-Bobbin org that share an integer never cross-deliver. Bobbin keeps its own shared key
-(`bobbin_shared_key`) and a plain per-event Celery task (no round-robin, no per-event splitting,
-no retry / auto-disable for now). TC2's routes, key and dispatcher are untouched.
+tables rather than having its own. A `provider` column (`'tc2'` | `'bobbin'`, defaulting to `'tc2'`)
+discriminates the two products; the generic `org_id` column holds the TC2 branch **or** the Bobbin
+organization id, and `bobbin_id` holds the bobbin-api endpoint id (`tc_id` stays NULL for Bobbin
+rows). Senders filter on `provider`, so a TC2 branch and a Bobbin org that share an `org_id` integer
+never cross-deliver.
 
-When deploying the Bobbin support to an existing live system:
+Only the **ingest** differs per product: Bobbin has its own shared key (`bobbin_shared_key`), its own
+routes, and enqueues directly (no round-robin). Everything downstream — the single `task_send_webhooks`
+delivery task, signing, retries, auto-disable, and log cleanup — is shared. Auto-disable notifications
+are per-provider: TC2 posts to `tc2_endpoint_disabled_url`, Bobbin to `bobbin_endpoint_disabled_url`
+(unset ⇒ the endpoint is disabled silently).
+
+When deploying to an existing live system:
 
 1. Deploy the code (the unified model lives in `chronos/sql_models.py`).
 2. **Manually migrate the live `webhookendpoint` table** — Chronos has no Alembic and `create_all`
-   never `ALTER`s existing tables, so this is a one-off human step against the prod DSN:
+   never `ALTER`s existing tables, so this is a one-off human step against the prod DSN. Existing rows
+   are all TC2, so the `provider` default backfills them correctly:
+   - `ALTER TABLE webhookendpoint ADD COLUMN provider varchar NOT NULL DEFAULT 'tc2';`
+   - `ALTER TABLE webhookendpoint RENAME COLUMN branch_id TO org_id;`
    - `ALTER TABLE webhookendpoint ADD COLUMN bobbin_id integer;`
    - `ALTER TABLE webhookendpoint ADD COLUMN events jsonb NOT NULL DEFAULT '[]'::jsonb;`
    - `ALTER TABLE webhookendpoint ALTER COLUMN tc_id DROP NOT NULL;`
-   - `ALTER TABLE webhookendpoint ADD CONSTRAINT uq_branch_bobbin UNIQUE (branch_id, bobbin_id);`
+   - `ALTER TABLE webhookendpoint ADD CONSTRAINT uq_org_bobbin UNIQUE (org_id, bobbin_id);`
 
    (`webhooklog` is unchanged — Bobbin deliveries log into it as-is.)
-3. Set `bobbin_shared_key` as an environment variable on the **web and worker** services.
+3. Set `bobbin_shared_key` (and optionally `bobbin_endpoint_disabled_url`) as environment variables on
+   the **web and worker** services.

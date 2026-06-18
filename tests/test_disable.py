@@ -45,7 +45,7 @@ def _create_endpoint(app_db: Session, branch_id: int = 199, active: bool = True,
     ep = WebhookEndpoint(
         tc_id=kwargs.get('tc_id', 200),
         name=kwargs.get('name', 'disable-test'),
-        branch_id=branch_id,
+        org_id=branch_id,
         webhook_url=kwargs.get('webhook_url', 'https://disable-test.example.com/hook'),
         api_key=kwargs.get('api_key', 'secret'),
         active=active,

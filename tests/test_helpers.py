@@ -4,7 +4,7 @@ from httpx import Response
 from requests import Request
 
 from chronos.main import app
-from chronos.pydantic_schema import BobbinIntegration
+from chronos.pydantic_schema import BobbinIntegration, TCIntegration
 from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.utils import settings
 
@@ -131,10 +131,10 @@ def _get_endpoint_headers() -> dict:
 
 def create_endpoint_from_dft_data(count: int = 1, **kwargs) -> list[WebhookEndpoint]:
     integration_data = get_dft_endpoint_data_list(count=count, **kwargs)
-    if len(integration_data['integrations']) == 1:
-        return [WebhookEndpoint(**integration_data['integrations'][0])]
-    else:
-        return [WebhookEndpoint(**integration) for integration in integration_data['integrations']]
+    return [
+        WebhookEndpoint(**TCIntegration(**integration).to_endpoint_fields())
+        for integration in integration_data['integrations']
+    ]
 
 
 def create_webhook_log_from_dft_data(**kwargs) -> WebhookLog:

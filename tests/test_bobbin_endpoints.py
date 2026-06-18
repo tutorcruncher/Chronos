@@ -32,8 +32,9 @@ def test_create_bobbin_endpoint(session: Session, client: TestClient):
         'updated': [],
     }
     endpoint = session.exec(select(WebhookEndpoint)).one()
+    assert endpoint.provider == 'bobbin'
     assert endpoint.bobbin_id == 1
-    assert endpoint.branch_id == 99
+    assert endpoint.org_id == 99
     assert endpoint.tc_id is None
     assert endpoint.events == []
 
@@ -102,11 +103,11 @@ def test_delete_bobbin_endpoint_invalid_data(session: Session, client: TestClien
 
 def test_send_bobbin_webhook_initiated(session: Session, client: TestClient):
     payload = get_dft_bobbin_send_data()
-    with patch('chronos.views.bobbin.task_send_bobbin_webhooks.delay') as mock_delay:
+    with patch('chronos.views.bobbin.task_send_webhooks.delay') as mock_delay:
         r = client.post(send_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 200
     assert r.json() == {'message': 'Sending bobbin webhook to endpoints has been successfully initiated.'}
-    mock_delay.assert_called_once_with(json.dumps(payload), 99)
+    mock_delay.assert_called_once_with(json.dumps(payload))
 
 
 def test_send_bobbin_webhook_invalid_data(session: Session, client: TestClient):

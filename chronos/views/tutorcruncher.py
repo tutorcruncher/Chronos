@@ -135,17 +135,17 @@ async def create_update_endpoint(
 
     for integration in integration_list.integrations:
         # Check if the endpoint already exists, if it does then we update it. Otherwise, we create a new one.
-        webhook_payload = integration.model_dump()
+        endpoint_fields = integration.to_endpoint_fields()
         try:
             endpoint_qs = select(WebhookEndpoint).where(WebhookEndpoint.tc_id == integration.tc_id)
             endpoint = db.exec(endpoint_qs).one()
         except NoResultFound:
-            endpoint = WebhookEndpoint(**webhook_payload)
+            endpoint = WebhookEndpoint(**endpoint_fields)
             db.add(endpoint)
             db.commit()
             created.append({'message': f'WebhookEndpoint {endpoint.name} (TC ID: {endpoint.tc_id}) created'})
         else:
-            endpoint.sqlmodel_update(integration)
+            endpoint.sqlmodel_update(endpoint_fields)
             db.commit()
             updated.append({'message': f'WebhookEndpoint {endpoint.name} (TC ID: {endpoint.tc_id}) updated'})
     return {'created': created, 'updated': updated}
@@ -166,14 +166,16 @@ async def delete_endpoint(
     """
 
     assert check_tc_authorisation(authorisation)
-    webhook_payload = delete_data.model_dump()
 
-    # Check the endpoint exists and delete it
+    # Check the endpoint exists and delete it (delete_data carries the TC2 wire branch_id -> org_id).
     try:
-        endpoint_qs = select(WebhookEndpoint).filter_by(**webhook_payload)
+        endpoint_qs = select(WebhookEndpoint).where(
+            WebhookEndpoint.tc_id == delete_data.tc_id,
+            WebhookEndpoint.org_id == delete_data.branch_id,
+        )
         endpoint = db.exec(endpoint_qs).one()
     except NoResultFound as e:
-        return {'message': f'WebhookEndpoint with TC ID: {webhook_payload["tc_id"]} not found: {e}'}
+        return {'message': f'WebhookEndpoint with TC ID: {delete_data.tc_id} not found: {e}'}
 
     # Deactivate immediately so no new sends pick this endpoint while cleanup runs.
     endpoint.active = False
