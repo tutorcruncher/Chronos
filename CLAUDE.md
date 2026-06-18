@@ -51,7 +51,7 @@ Request/response shapes are defined in `chronos/pydantic_schema.py` (e.g. `TCWeb
 
 ## Data Models (SQLModel / PostgreSQL)
 
-- **`WebhookEndpoint`** (`chronos/sql_models.py`): id, provider (`'tc2'`|`'bobbin'`, default `'tc2'`), tc_id (nullable, unique), bobbin_id (nullable), name, org_id, webhook_url, api_key, active, events (JSONB, Bobbin event filter), timestamp. Shared by both products and discriminated by `provider`: a TC2 row has `tc_id` set / `bobbin_id` NULL with `org_id` = TC branch; a Bobbin row has `bobbin_id` set / `tc_id` NULL with `org_id` = Bobbin organization id. `(org_id, bobbin_id)` is unique. See "Bobbin webhooks" below.
+- **`WebhookEndpoint`** (`chronos/sql_models.py`): id, provider (required: `'tutorcruncher'`|`'bobbin'`), tc_id (nullable, unique), bobbin_id (nullable), name, org_id, webhook_url, api_key, active, events (JSONB, Bobbin event filter), timestamp. Shared by both products and discriminated by `provider`: a TC2 row has `tc_id` set / `bobbin_id` NULL with `org_id` = TC branch; a Bobbin row has `bobbin_id` set / `tc_id` NULL with `org_id` = Bobbin organization id. `(org_id, bobbin_id)` is unique. See "Bobbin webhooks" below.
 - **`WebhookLog`**: id, request_headers/body, response_headers/body (JSONB), status, status_code, timestamp, webhook_endpoint_id (FK). Written by the worker after each delivery attempt; holds both TC2 and Bobbin logs.
 
 DB session: `chronos/db.py` – engine from `pg_dsn` (or `test_pg_dsn` when `settings.testing`). Tables created via `init_db()` (used by `chronos/scripts/create_db_tables.py`, which requires `dev_mode`).

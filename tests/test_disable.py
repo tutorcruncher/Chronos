@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.utils import settings
 from chronos.worker import _webhook_host_is_exempt_from_auto_disable, task_retry_single_webhook, task_send_webhooks
 from tests.test_helpers import (
@@ -43,6 +43,7 @@ def cleanup_disable_data(app_db: Session):
 # Use branch_id 199 so disable tests don't share branch 99 with retry tests (avoids cross-test disables).
 def _create_endpoint(app_db: Session, branch_id: int = 199, active: bool = True, **kwargs) -> WebhookEndpoint:
     ep = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=kwargs.get('tc_id', 200),
         name=kwargs.get('name', 'disable-test'),
         org_id=branch_id,

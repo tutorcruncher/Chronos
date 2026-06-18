@@ -177,22 +177,20 @@ def _get_bobbin_headers() -> dict:
     }
 
 
-def get_dft_bobbin_endpoint_data_list(count: int = 1, organization_id: int = BOBBIN_ORG_ID, **kwargs) -> dict:
-    integrations = []
-    for i in range(1, count + 1):
-        integration_dict = {
-            'bobbin_endpoint_id': i,
-            'organization_id': organization_id,
-            'name': f'bobbin_endpoint_{i}',
-            'active': True,
-            'webhook_url': f'https://bobbin_endpoint_{i}.com',
-            'api_key': 'bobbin_key',
-            'events': [],
-        }
-        for k, v in kwargs.items():
-            integration_dict[k] = v
-        integrations.append(integration_dict)
-    return {'integrations': integrations, 'request_time': 1234567890}
+def get_dft_bobbin_endpoint_data(**kwargs) -> dict:
+    """A single Bobbin integration payload (the create-update endpoint takes one object)."""
+    bobbin_endpoint_id = kwargs.get('bobbin_endpoint_id', 1)
+    integration_dict = {
+        'bobbin_endpoint_id': bobbin_endpoint_id,
+        'organization_id': BOBBIN_ORG_ID,
+        'name': f'bobbin_endpoint_{bobbin_endpoint_id}',
+        'active': True,
+        'webhook_url': f'https://bobbin_endpoint_{bobbin_endpoint_id}.com',
+        'api_key': 'bobbin_key',
+        'events': [],
+    }
+    integration_dict.update(kwargs)
+    return integration_dict
 
 
 def get_dft_bobbin_endpoint_deletion_data(organization_id: int = BOBBIN_ORG_ID, **kwargs) -> dict:
@@ -235,10 +233,13 @@ def get_dft_bobbin_webhook_log_data(webhook_endpoint_id: int = 1, **kwargs) -> d
 
 def create_bobbin_endpoint_from_dft_data(count: int = 1, **kwargs) -> list[WebhookEndpoint]:
     """Build unified WebhookEndpoint rows from the Bobbin wire shape (mapped via BobbinIntegration)."""
-    integration_data = get_dft_bobbin_endpoint_data_list(count=count, **kwargs)
     return [
-        WebhookEndpoint(**BobbinIntegration(**integration).to_endpoint_fields())
-        for integration in integration_data['integrations']
+        WebhookEndpoint(
+            **BobbinIntegration(
+                **get_dft_bobbin_endpoint_data(**{'bobbin_endpoint_id': i, **kwargs})
+            ).to_endpoint_fields()
+        )
+        for i in range(1, count + 1)
     ]
 
 

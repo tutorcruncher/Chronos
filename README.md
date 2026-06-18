@@ -61,7 +61,7 @@ To set up the Chronos system in render follow these steps:
 
 Chronos also serves the Bobbin (bobbin-api) product's outbound webhooks via the `/bobbin/*`
 routes (in `chronos/views/bobbin.py`). Bobbin shares TC2's `WebhookEndpoint` / `WebhookLog`
-tables rather than having its own. A `provider` column (`'tc2'` | `'bobbin'`, defaulting to `'tc2'`)
+tables rather than having its own. A required `provider` column (`'tutorcruncher'` | `'bobbin'`)
 discriminates the two products; the generic `org_id` column holds the TC2 branch **or** the Bobbin
 organization id, and `bobbin_id` holds the bobbin-api endpoint id (`tc_id` stays NULL for Bobbin
 rows). Senders filter on `provider`, so a TC2 branch and a Bobbin org that share an `org_id` integer
@@ -78,8 +78,8 @@ When deploying to an existing live system:
 1. Deploy the code (the unified model lives in `chronos/sql_models.py`).
 2. **Manually migrate the live `webhookendpoint` table** — Chronos has no Alembic and `create_all`
    never `ALTER`s existing tables, so this is a one-off human step against the prod DSN. Existing rows
-   are all TC2, so the `provider` default backfills them correctly:
-   - `ALTER TABLE webhookendpoint ADD COLUMN provider varchar NOT NULL DEFAULT 'tc2';`
+   are all TC2, so the one-off `DEFAULT` backfills them correctly (the model field itself is required):
+   - `ALTER TABLE webhookendpoint ADD COLUMN provider varchar NOT NULL DEFAULT 'tutorcruncher';`
    - `ALTER TABLE webhookendpoint RENAME COLUMN branch_id TO org_id;`
    - `ALTER TABLE webhookendpoint ADD COLUMN bobbin_id integer;`
    - `ALTER TABLE webhookendpoint ADD COLUMN events jsonb NOT NULL DEFAULT '[]'::jsonb;`

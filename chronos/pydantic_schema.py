@@ -110,13 +110,6 @@ class BobbinIntegration(BaseModel):
         }
 
 
-class BobbinIntegrations(BaseModel):
-    """Batch of Bobbin endpoints mirrored from bobbin-api."""
-
-    integrations: list[BobbinIntegration]
-    request_time: int
-
-
 class BobbinDeleteIntegration(BaseModel):
     """Identifies a Bobbin endpoint to delete (org-scoped)."""
 
@@ -131,6 +124,20 @@ class BobbinWebhookSend(BaseModel):
     organization_id: int
     data: dict
     request_time: int
+
+
+class MessageResponse(BaseModel):
+    """A simple `{message: ...}` response (Bobbin create/update, delete, send)."""
+
+    message: str
+
+
+class WebhookLogsResponse(BaseModel):
+    """A page of delivery logs, plus a `message` when there are none for the page."""
+
+    logs: list[dict]
+    count: int
+    message: Optional[str] = None
 
 
 class RequestData(BaseModel):

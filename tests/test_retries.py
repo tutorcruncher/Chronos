@@ -11,7 +11,7 @@ from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from chronos.pydantic_schema import RequestData
-from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.utils import settings
 from chronos.worker import job_queue, task_retry_single_webhook, task_send_webhooks
@@ -33,6 +33,7 @@ def cleanup_retry_data(app_db: Session):
 
 def _create_endpoint(app_db: Session, branch_id: int = 99, active: bool = True, **kwargs) -> WebhookEndpoint:
     ep = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=kwargs.get('tc_id', 1),
         name=kwargs.get('name', 'retry-test'),
         org_id=branch_id,

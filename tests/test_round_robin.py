@@ -13,7 +13,7 @@ import respx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
 from chronos.views.tutorcruncher import _extract_branch_id
@@ -268,6 +268,7 @@ def test_job_dispatcher_task_smoke_dispatches_live_queued_job(session: Session, 
     from chronos.worker import job_dispatcher_task
 
     ep = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=650,
         name='dispatcher-smoke',
         org_id=99,
@@ -361,6 +362,7 @@ def test_task_send_webhooks_autoretry_config_is_set():
 def test_async_post_webhooks_empty_events_list():
     """events=[] produces zero outgoing requests even with active endpoints."""
     endpoint = WebhookEndpoint(
+        provider=Provider.TC2,
         id=1,
         tc_id=1,
         name='test-endpoint',
@@ -381,6 +383,7 @@ def test_async_post_webhooks_empty_events_list():
 def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
     """Invalid URL schemes are skipped; valid endpoints process all events."""
     valid_endpoint = WebhookEndpoint(
+        provider=Provider.TC2,
         id=1,
         tc_id=1,
         name='valid-hook',
@@ -390,6 +393,7 @@ def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
         active=True,
     )
     invalid_endpoint = WebhookEndpoint(
+        provider=Provider.TC2,
         id=2,
         tc_id=2,
         name='invalid-hook',
@@ -594,6 +598,7 @@ def test_e2e_tc2_multi_event_webhook_splits_and_delivers(session: Session, clien
     from sqlalchemy import delete as sa_delete
 
     ep1 = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=501,
         name='alpha-hook',
         org_id=99,
@@ -602,6 +607,7 @@ def test_e2e_tc2_multi_event_webhook_splits_and_delivers(session: Session, clien
         active=True,
     )
     ep2 = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=502,
         name='beta-hook',
         org_id=99,
@@ -737,6 +743,7 @@ def test_e2e_tc2_public_profile_webhook_no_split_with_url_extension(
 
     # -- Setup: one active endpoint for branch 99 --------------------------
     ep = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=601,
         name='profile-hook',
         org_id=99,
@@ -837,6 +844,7 @@ def test_e2e_multi_tenant_isolation_no_cross_delivery(session: Session, client: 
     from sqlalchemy import delete as sa_delete
 
     ep_alpha = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=701,
         name='alpha-hook',
         org_id=99,
@@ -845,6 +853,7 @@ def test_e2e_multi_tenant_isolation_no_cross_delivery(session: Session, client: 
         active=True,
     )
     ep_beta = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=702,
         name='beta-hook',
         org_id=99,
@@ -853,6 +862,7 @@ def test_e2e_multi_tenant_isolation_no_cross_delivery(session: Session, client: 
         active=True,
     )
     ep_gamma = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=703,
         name='gamma-hook',
         org_id=199,
@@ -1056,6 +1066,7 @@ def test_e2e_large_tenant_backlog_does_not_cross_tenant_delivery(session: Sessio
     from sqlalchemy import delete as sa_delete
 
     ep_alpha = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=801,
         name='alpha-hook',
         org_id=99,
@@ -1064,6 +1075,7 @@ def test_e2e_large_tenant_backlog_does_not_cross_tenant_delivery(session: Sessio
         active=True,
     )
     ep_beta = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=802,
         name='beta-hook',
         org_id=99,
@@ -1072,6 +1084,7 @@ def test_e2e_large_tenant_backlog_does_not_cross_tenant_delivery(session: Sessio
         active=True,
     )
     ep_gamma = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=803,
         name='gamma-hook',
         org_id=199,

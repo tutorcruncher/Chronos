@@ -481,10 +481,11 @@ def _resolve_send_target(loaded_payload: dict) -> tuple[Provider, int, set]:
     """
     if 'event_type' in loaded_payload:
         return Provider.BOBBIN, loaded_payload['organization_id'], {loaded_payload['event_type']}
-    events = loaded_payload.get('events')
-    org_id = events[0]['branch'] if events else loaded_payload['branch_id']
-    event_types = {event.get('event') for event in events} if events else set()
-    return Provider.TC2, org_id, event_types
+    else:
+        events = loaded_payload.get('events')
+        org_id = events[0]['branch'] if events else loaded_payload['branch_id']
+        event_types = {event.get('event') for event in events} if events else set()
+        return Provider.TC2, org_id, event_types
 
 
 @celery_app.task(

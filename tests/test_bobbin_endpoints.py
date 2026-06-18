@@ -12,7 +12,7 @@ from tests.test_helpers import (
     _get_bobbin_headers,
     create_bobbin_endpoint_from_dft_data,
     create_bobbin_webhook_log_from_dft_data,
-    get_dft_bobbin_endpoint_data_list,
+    get_dft_bobbin_endpoint_data,
     get_dft_bobbin_endpoint_deletion_data,
     get_dft_bobbin_send_data,
     get_dft_endpoint_data_list,
@@ -24,13 +24,10 @@ send_url = app.url_path_for('send_bobbin_webhook')
 
 
 def test_create_bobbin_endpoint(session: Session, client: TestClient):
-    payload = get_dft_bobbin_endpoint_data_list()
+    payload = get_dft_bobbin_endpoint_data()
     r = client.post(create_update_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 200
-    assert r.json() == {
-        'created': [{'message': 'WebhookEndpoint bobbin_endpoint_1 (org: 99) created'}],
-        'updated': [],
-    }
+    assert r.json() == {'message': 'WebhookEndpoint bobbin_endpoint_1 (org: 99) created'}
     endpoint = session.exec(select(WebhookEndpoint)).one()
     assert endpoint.provider == 'bobbin'
     assert endpoint.bobbin_id == 1
@@ -43,20 +40,17 @@ def test_update_bobbin_endpoint(session: Session, client: TestClient):
     session.add(create_bobbin_endpoint_from_dft_data()[0])
     session.commit()
 
-    payload = get_dft_bobbin_endpoint_data_list(name='renamed', events=['lesson.completed'])
+    payload = get_dft_bobbin_endpoint_data(name='renamed', events=['lesson.completed'])
     r = client.post(create_update_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 200
-    assert r.json() == {
-        'created': [],
-        'updated': [{'message': 'WebhookEndpoint renamed (org: 99) updated'}],
-    }
+    assert r.json() == {'message': 'WebhookEndpoint renamed (org: 99) updated'}
     endpoint = session.exec(select(WebhookEndpoint)).one()
     assert endpoint.name == 'renamed'
     assert endpoint.events == ['lesson.completed']
 
 
 def test_create_bobbin_endpoint_invalid_data(session: Session, client: TestClient):
-    payload = get_dft_bobbin_endpoint_data_list(active=50)
+    payload = get_dft_bobbin_endpoint_data(active=50)
     r = client.post(create_update_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 422
     assert r.json()['detail'][0]['msg'] == 'Input should be a valid boolean, unable to interpret input'
@@ -116,7 +110,7 @@ def test_send_bobbin_webhook_invalid_data(session: Session, client: TestClient):
 
 
 def test_bobbin_route_wrong_key_rejected(session: Session, client: TestClient):
-    payload = get_dft_bobbin_endpoint_data_list()
+    payload = get_dft_bobbin_endpoint_data()
     headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer wrong-key'}
     with patch.object(settings, 'bobbin_shared_key', 'bobbin-secret'):
         r = client.post(create_update_url, data=json.dumps(payload), headers=headers)
@@ -125,7 +119,7 @@ def test_bobbin_route_wrong_key_rejected(session: Session, client: TestClient):
 
 
 def test_tc2_key_does_not_authorise_bobbin_routes(session: Session, client: TestClient):
-    payload = get_dft_bobbin_endpoint_data_list()
+    payload = get_dft_bobbin_endpoint_data()
     with (
         patch.object(settings, 'bobbin_shared_key', 'bobbin-secret'),
         patch.object(settings, 'tc2_shared_key', 'tc2-secret'),
