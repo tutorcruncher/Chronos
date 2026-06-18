@@ -120,32 +120,6 @@ class TestBobbinWorkers:
         assert len(_logs_for(db, other_id)) == 0
 
     @respx.mock
-    def test_send_bobbin_events_filter(self, db: Session, client: TestClient, celery_session_worker):
-        ep_match = create_bobbin_endpoint_from_dft_data(events=['lesson.completed'])[0]
-        ep_miss = create_bobbin_endpoint_from_dft_data(
-            bobbin_endpoint_id=2, events=['transcript.ready'], webhook_url='https://miss.com'
-        )[0]
-        db.add(ep_match)
-        db.add(ep_miss)
-        db.commit()
-        match_id, miss_id = ep_match.id, ep_miss.id
-
-        payload = get_dft_bobbin_send_data(event_type='lesson.completed')
-        mock_match = respx.post(ep_match.webhook_url).mock(
-            return_value=get_successful_response(payload, _get_bobbin_headers())
-        )
-        mock_miss = respx.post(ep_miss.webhook_url).mock(
-            return_value=get_successful_response(payload, _get_bobbin_headers())
-        )
-
-        task_send_webhooks(json.dumps(payload))
-
-        assert mock_match.called
-        assert not mock_miss.called
-        assert len(_logs_for(db, match_id)) == 1
-        assert len(_logs_for(db, miss_id)) == 0
-
-    @respx.mock
     def test_send_bobbin_inactive_not_sent(self, db: Session, client: TestClient, celery_session_worker):
         ep = create_bobbin_endpoint_from_dft_data(active=False)[0]
         db.add(ep)

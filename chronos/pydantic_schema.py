@@ -90,7 +90,6 @@ class BobbinIntegration(BaseModel):
     active: bool
     webhook_url: str
     api_key: str
-    events: list[str] = []
 
     def to_endpoint_fields(self) -> dict:
         """Map the bobbin-api wire shape onto the shared WebhookEndpoint columns.
@@ -106,7 +105,6 @@ class BobbinIntegration(BaseModel):
             'active': self.active,
             'webhook_url': self.webhook_url,
             'api_key': self.api_key,
-            'events': self.events,
         }
 
 

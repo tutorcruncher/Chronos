@@ -463,29 +463,19 @@ def task_retry_single_webhook(
             )
 
 
-def _endpoint_subscribed(endpoint: WebhookEndpoint, event_types: set) -> bool:
-    """True if the endpoint subscribes to any of these event types (empty filter == all events).
-
-    TC2 endpoints carry no events filter ([]), so they always match — only Bobbin endpoints
-    narrow delivery by event type.
-    """
-    return not endpoint.events or bool(set(endpoint.events) & event_types)
-
-
-def _resolve_send_target(loaded_payload: dict) -> tuple[Provider, int, set]:
-    """Work out provider, org_id and event types from an inbound payload.
+def _resolve_send_target(loaded_payload: dict) -> tuple[Provider, int]:
+    """Work out provider and org_id from an inbound payload.
 
     This is the only provider-specific step: the two products ship different ingest shapes
     (Bobbin sends a single ``event_type`` + ``organization_id``; TC2 sends ``events`` /
     ``branch_id``). Everything downstream is provider-agnostic.
     """
     if 'event_type' in loaded_payload:
-        return Provider.BOBBIN, loaded_payload['organization_id'], {loaded_payload['event_type']}
+        return Provider.BOBBIN, loaded_payload['organization_id']
     else:
         events = loaded_payload.get('events')
         org_id = events[0]['branch'] if events else loaded_payload['branch_id']
-        event_types = {event.get('event') for event in events} if events else set()
-        return Provider.TC2, org_id, event_types
+        return Provider.TC2, org_id
 
 
 @celery_app.task(
@@ -498,7 +488,7 @@ def task_send_webhooks(payload: str, url_extension: str = None):
     Send the webhook to the relevant endpoints (TC2 or Bobbin — resolved from the payload shape).
     """
     loaded_payload = json.loads(payload)
-    provider, org_id, event_types = _resolve_send_target(loaded_payload)
+    provider, org_id = _resolve_send_target(loaded_payload)
 
     qlength = job_queue.get_celery_queue_length()
     if qlength > settings.dispatcher_max_celery_queue:
@@ -508,13 +498,13 @@ def task_send_webhooks(payload: str, url_extension: str = None):
     with logfire.span('Sending webhooks for {provider=} {org_id=}', provider=provider, org_id=org_id):
         with Session(engine) as db:
             # Endpoints for this org, scoped by provider so a TC2 branch and a Bobbin org that share
-            # an org_id integer never cross-deliver. Bobbin endpoints are further filtered by event.
+            # an org_id integer never cross-deliver.
             endpoints_query = select(WebhookEndpoint).where(
                 WebhookEndpoint.org_id == org_id,
                 WebhookEndpoint.active,
                 WebhookEndpoint.provider == provider,
             )
-            endpoints = [ep for ep in db.exec(endpoints_query).all() if _endpoint_subscribed(ep, event_types)]
+            endpoints = db.exec(endpoints_query).all()
 
             webhook_logs, total_success, total_failed, retry_list = asyncio.run(
                 _async_post_webhooks(endpoints, url_extension, payload)

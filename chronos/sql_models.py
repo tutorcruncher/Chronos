@@ -43,7 +43,6 @@ class WebhookEndpoint(SQLModel, table=True):
     webhook_url: str
     api_key: str
     active: bool
-    events: list[str] = Field(default_factory=list, sa_type=JSONB)  # Bobbin event filter ([] == all); empty for TC2
     timestamp: datetime.datetime = Field(
         default_factory=datetime.datetime.utcnow, nullable=False, index=True
     )  # do we care?

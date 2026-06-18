@@ -33,20 +33,18 @@ def test_create_bobbin_endpoint(session: Session, client: TestClient):
     assert endpoint.bobbin_id == 1
     assert endpoint.org_id == 99
     assert endpoint.tc_id is None
-    assert endpoint.events == []
 
 
 def test_update_bobbin_endpoint(session: Session, client: TestClient):
     session.add(create_bobbin_endpoint_from_dft_data()[0])
     session.commit()
 
-    payload = get_dft_bobbin_endpoint_data(name='renamed', events=['lesson.completed'])
+    payload = get_dft_bobbin_endpoint_data(name='renamed')
     r = client.post(create_update_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 200
     assert r.json() == {'message': 'WebhookEndpoint renamed (org: 99) updated'}
     endpoint = session.exec(select(WebhookEndpoint)).one()
     assert endpoint.name == 'renamed'
-    assert endpoint.events == ['lesson.completed']
 
 
 def test_create_bobbin_endpoint_invalid_data(session: Session, client: TestClient):

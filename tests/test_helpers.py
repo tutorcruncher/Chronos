@@ -187,7 +187,6 @@ def get_dft_bobbin_endpoint_data(**kwargs) -> dict:
         'active': True,
         'webhook_url': f'https://bobbin_endpoint_{bobbin_endpoint_id}.com',
         'api_key': 'bobbin_key',
-        'events': [],
     }
     integration_dict.update(kwargs)
     return integration_dict

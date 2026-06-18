@@ -82,7 +82,6 @@ When deploying to an existing live system:
    - `ALTER TABLE webhookendpoint ADD COLUMN provider varchar NOT NULL DEFAULT 'tutorcruncher';`
    - `ALTER TABLE webhookendpoint RENAME COLUMN branch_id TO org_id;`
    - `ALTER TABLE webhookendpoint ADD COLUMN bobbin_id integer;`
-   - `ALTER TABLE webhookendpoint ADD COLUMN events jsonb NOT NULL DEFAULT '[]'::jsonb;`
    - `ALTER TABLE webhookendpoint ALTER COLUMN tc_id DROP NOT NULL;`
    - `ALTER TABLE webhookendpoint ADD CONSTRAINT uq_org_bobbin UNIQUE (org_id, bobbin_id);`
 
