@@ -1,7 +1,6 @@
-import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
@@ -75,10 +74,11 @@ async def delete_bobbin_endpoint(
     """Deactivate the endpoint immediately, then clean up its logs asynchronously."""
     try:
         endpoint = _get_bobbin_endpoint(db, delete_data.organization_id, delete_data.bobbin_endpoint_id)
-    except NoResultFound as e:
-        return {
-            'message': f'WebhookEndpoint {delete_data.bobbin_endpoint_id} (org: {delete_data.organization_id}) not found: {e}'
-        }
+    except NoResultFound:
+        raise HTTPException(
+            status_code=404,
+            detail=f'WebhookEndpoint {delete_data.bobbin_endpoint_id} (org: {delete_data.organization_id}) not found',
+        )
 
     endpoint.active = False
     db.commit()
@@ -94,7 +94,7 @@ async def delete_bobbin_endpoint(
 )
 async def send_bobbin_webhook(webhook: BobbinWebhookSend) -> dict:
     """Queue a Bobbin event for delivery via the shared send task (no round-robin)."""
-    task_send_webhooks.delay(json.dumps(webhook.model_dump()))
+    task_send_webhooks.delay(webhook.model_dump(mode='json'))
     return {'message': 'Sending bobbin webhook to endpoints has been successfully initiated.'}
 
 
@@ -112,11 +112,9 @@ async def get_bobbin_logs(
     """Return a page of delivery logs for an endpoint, double-scoped on org AND endpoint id."""
     try:
         endpoint = _get_bobbin_endpoint(db, organization_id, bobbin_endpoint_id)
-    except NoResultFound as e:
-        return {
-            'message': f'WebhookEndpoint {bobbin_endpoint_id} (org: {organization_id}) not found: {e}',
-            'logs': [],
-            'count': 0,
-        }
+    except NoResultFound:
+        raise HTTPException(
+            status_code=404, detail=f'WebhookEndpoint {bobbin_endpoint_id} (org: {organization_id}) not found'
+        )
 
     return serialize_logs_response(db, endpoint, page)

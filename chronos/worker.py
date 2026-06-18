@@ -275,7 +275,7 @@ def _process_response(request_data: RequestData) -> tuple[WebhookLog, bool]:
     return _request_data_to_log(request_data), _is_retryable(request_data)
 
 
-async def _async_post_webhooks(endpoints, url_extension, payload):
+async def _async_post_webhooks(endpoints, url_extension, loaded_payload: dict):
     """Fan out a payload to all endpoints concurrently and return delivery results.
 
     Each multi-event payload is split into one request per event before sending
@@ -287,7 +287,6 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     total_success, total_failed = 0, 0
     retry_list = []  # (endpoint_id, payload_str, url_extension)
     limits = httpx.Limits(max_connections=settings.webhook_http_max_connections)
-    loaded_payload = json.loads(payload)
 
     async with AsyncClient(limits=limits) as client:
         coros = [
@@ -483,11 +482,14 @@ def _resolve_send_target(loaded_payload: dict) -> tuple[Provider, int]:
     retry_kwargs={'max_retries': 3},
     retry_backoff=True,
 )
-def task_send_webhooks(payload: str, url_extension: str = None):
+def task_send_webhooks(payload: str | dict, url_extension: str = None):
     """
     Send the webhook to the relevant endpoints (TC2 or Bobbin — resolved from the payload shape).
+
+    `payload` is the inbound webhook as a dict, or a JSON string (the round-robin dispatcher
+    serialises payloads to JSON when queueing them in Redis).
     """
-    loaded_payload = json.loads(payload)
+    loaded_payload = json.loads(payload) if isinstance(payload, str) else payload
     provider, org_id = _resolve_send_target(loaded_payload)
 
     qlength = job_queue.get_celery_queue_length()
@@ -507,7 +509,7 @@ def task_send_webhooks(payload: str, url_extension: str = None):
             endpoints = db.exec(endpoints_query).all()
 
             webhook_logs, total_success, total_failed, retry_list = asyncio.run(
-                _async_post_webhooks(endpoints, url_extension, payload)
+                _async_post_webhooks(endpoints, url_extension, loaded_payload)
             )
             for webhook_log in webhook_logs:
                 db.add(webhook_log)

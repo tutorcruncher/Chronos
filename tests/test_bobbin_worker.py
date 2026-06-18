@@ -66,7 +66,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(payload, _get_bobbin_headers())
         )
 
-        task_send_webhooks(json.dumps(payload))
+        task_send_webhooks(payload)
 
         assert mock_request.called
         logs = _logs_for(db, ep_id)
@@ -90,7 +90,7 @@ class TestBobbinWorkers:
         db.commit()
         ep_ids = [ep.id for ep in eps]
 
-        task_send_webhooks(json.dumps(payload))
+        task_send_webhooks(payload)
 
         logs = db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id.in_(ep_ids))).all()
         assert len(logs) == 5
@@ -112,7 +112,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(payload, _get_bobbin_headers())
         )
 
-        task_send_webhooks(json.dumps(payload))
+        task_send_webhooks(payload)
 
         assert mock_target.called
         assert not mock_other.called
@@ -131,7 +131,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(payload, _get_bobbin_headers())
         )
 
-        task_send_webhooks(json.dumps(payload))
+        task_send_webhooks(payload)
 
         assert not mock_request.called
         assert not _logs_for(db, ep_id)
@@ -144,7 +144,7 @@ class TestBobbinWorkers:
         ep_id = ep.id
 
         payload = get_dft_bobbin_send_data()
-        task_send_webhooks(json.dumps(payload))
+        task_send_webhooks(payload)
 
         assert not _logs_for(db, ep_id)
 
@@ -158,7 +158,7 @@ class TestBobbinWorkers:
         payload = get_dft_bobbin_send_data()
         respx.post(ep.webhook_url).mock(return_value=get_failed_response(payload, _get_bobbin_headers()))
 
-        task_send_webhooks(json.dumps(payload))
+        task_send_webhooks(payload)
 
         logs = _logs_for(db, ep_id)
         assert len(logs) == 1
@@ -175,7 +175,7 @@ class TestBobbinWorkers:
         payload = get_dft_bobbin_send_data()
         respx.post(ep.webhook_url).mock(side_effect=httpx.TimeoutException(message='Timeout'))
 
-        task_send_webhooks(json.dumps(payload))
+        task_send_webhooks(payload)
 
         logs = _logs_for(db, ep_id)
         assert len(logs) == 1
@@ -202,7 +202,7 @@ class TestBobbinWorkers:
             return_value=get_successful_response(bobbin_payload, _get_webhook_headers())
         )
 
-        task_send_webhooks(json.dumps(bobbin_payload))
+        task_send_webhooks(bobbin_payload)
 
         assert mock_bobbin.called
         assert not mock_tc2.called
@@ -259,7 +259,7 @@ class TestBobbinWorkers:
         notify_url = 'https://bobbin.example.com/endpoint-disabled'
         with patch.object(settings, 'bobbin_endpoint_disabled_url', notify_url):
             mock_notify = respx.post(notify_url).mock(return_value=httpx.Response(200))
-            task_send_webhooks(json.dumps(payload))
+            task_send_webhooks(payload)
 
         db.expire_all()
         assert db.get(WebhookEndpoint, ep_id).active is False
@@ -279,6 +279,6 @@ class TestBobbinWorkers:
 
         payload = get_dft_bobbin_send_data()
         with patch('chronos.worker._send_single_webhook', side_effect=ValueError('boom')):
-            task_send_webhooks(json.dumps(payload))
+            task_send_webhooks(payload)
 
         assert not _logs_for(db, ep_id)

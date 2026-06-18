@@ -371,7 +371,7 @@ def test_async_post_webhooks_empty_events_list():
         api_key='secret',
         active=True,
     )
-    payload = json.dumps({'events': [], 'request_time': 1771509452})
+    payload = {'events': [], 'request_time': 1771509452}
 
     logs, success, failed, _ = asyncio.run(_async_post_webhooks([endpoint], None, payload))
 
@@ -402,12 +402,10 @@ def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
         api_key='key2',
         active=True,
     )
-    payload = json.dumps(
-        {
-            'events': REALISTIC_TC2_EVENTS,
-            'request_time': 1771509452,
-        }
-    )
+    payload = {
+        'events': REALISTIC_TC2_EVENTS,
+        'request_time': 1771509452,
+    }
 
     with respx.mock:
         respx.post('https://valid.example.com/hook').mock(return_value=httpx.Response(200))

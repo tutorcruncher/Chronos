@@ -83,8 +83,8 @@ def test_delete_bobbin_endpoint(session: Session, client: TestClient):
 def test_delete_bobbin_endpoint_doesnt_exist(session: Session, client: TestClient):
     payload = get_dft_bobbin_endpoint_deletion_data()
     r = client.post(delete_url, data=json.dumps(payload), headers=_get_bobbin_headers())
-    assert r.status_code == 200
-    assert r.json()['message'].startswith('WebhookEndpoint 1 (org: 99) not found')
+    assert r.status_code == 404
+    assert r.json()['detail'] == 'WebhookEndpoint 1 (org: 99) not found'
 
 
 def test_delete_bobbin_endpoint_invalid_data(session: Session, client: TestClient):
@@ -99,7 +99,7 @@ def test_send_bobbin_webhook_initiated(session: Session, client: TestClient):
         r = client.post(send_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 200
     assert r.json() == {'message': 'Sending bobbin webhook to endpoints has been successfully initiated.'}
-    mock_delay.assert_called_once_with(json.dumps(payload))
+    mock_delay.assert_called_once_with(payload)
 
 
 def test_send_bobbin_webhook_invalid_data(session: Session, client: TestClient):
@@ -170,7 +170,7 @@ def test_get_bobbin_logs(session: Session, client: TestClient):
     assert log['request_headers'] == {'User-Agent': 'Bobbin', 'Content-Type': 'application/json'}
 
 
-def test_get_bobbin_logs_wrong_org_returns_empty(session: Session, client: TestClient):
+def test_get_bobbin_logs_wrong_org_not_found(session: Session, client: TestClient):
     ep = create_bobbin_endpoint_from_dft_data()[0]
     session.add(ep)
     session.commit()
@@ -179,9 +179,8 @@ def test_get_bobbin_logs_wrong_org_returns_empty(session: Session, client: TestC
 
     url = app.url_path_for('get_bobbin_logs', organization_id=12345, bobbin_endpoint_id=1, page=0)
     r = client.get(url, headers=_get_bobbin_headers())
-    assert r.status_code == 200
-    assert r.json()['logs'] == []
-    assert r.json()['count'] == 0
+    assert r.status_code == 404
+    assert r.json()['detail'] == 'WebhookEndpoint 1 (org: 12345) not found'
 
 
 def test_get_bobbin_logs_empty_page(session: Session, client: TestClient):
