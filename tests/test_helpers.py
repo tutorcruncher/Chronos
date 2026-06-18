@@ -4,7 +4,7 @@ from httpx import Response
 from requests import Request
 
 from chronos.main import app
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.utils import settings
 
 send_webhook_with_extension_url = app.url_path_for('send_webhook_with_extension', url_extension='test')
@@ -102,7 +102,7 @@ def get_dft_webhook_log_data(branch_id: int = None, webhook_endpoint_id: int = N
         ),
         'response_headers': json.dumps({'User-Agent': 'TutorCruncher', 'Content-Type': 'application/json'}),
         'response_body': json.dumps({'status_code': 200, 'message': 'success'}),
-        'status': 'Success',
+        'status': WebhookStatus.SUCCESS,
         'status_code': 200,
         'timestamp': 1234567890,
         'webhook_endpoint_id': webhook_endpoint_id or 1,

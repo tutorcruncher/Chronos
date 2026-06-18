@@ -67,6 +67,16 @@ def client_fixture(session: Session):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def app_db(engine):
+    """Yield a session on the test engine so data is visible to task_send_webhooks.
+
+    Uses the conftest engine (test_pg_dsn) so the task's own session sees the same data.
+    """
+    with Session(engine) as db:
+        yield db
+
+
 @pytest.fixture(autouse=True)
 def clear_job_queue():
     yield
