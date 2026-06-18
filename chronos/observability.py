@@ -1,11 +1,25 @@
 import logging
 
 import logfire
+import sentry_sdk
 from logfire.integrations.logging import LogfireLoggingHandler
+from sentry_sdk.integrations.celery import CeleryIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 from chronos.utils import settings
 
 _configured = False
+
+
+def init_sentry(*, for_celery_worker: bool = False):
+    if not settings.sentry_dsn:
+        return
+    integrations = [
+        LoggingIntegration(level=logging.INFO, event_level=logging.WARNING),
+    ]
+    if for_celery_worker:
+        integrations.append(CeleryIntegration())
+    sentry_sdk.init(dsn=settings.sentry_dsn, integrations=integrations)
 
 
 def configure_logfire():
