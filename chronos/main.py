@@ -5,6 +5,7 @@ import sentry_sdk
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
+from chronos.bobbin_views import bobbin_router
 from chronos.logging import config
 from chronos.utils import settings as _app_settings
 from chronos.views import main_router
@@ -39,4 +40,5 @@ if bool(_app_settings.logfire_token):
 
     instrument_web_app(app)
 app.include_router(main_router, prefix='')
+app.include_router(bobbin_router, prefix='')
 app.include_router(cronjob, prefix='')

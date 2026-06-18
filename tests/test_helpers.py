@@ -4,7 +4,7 @@ from httpx import Response
 from requests import Request
 
 from chronos.main import app
-from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import BobbinWebhookEndpoint, BobbinWebhookLog, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.utils import settings
 
 send_webhook_with_extension_url = app.url_path_for('send_webhook_with_extension', url_extension='test')
@@ -161,3 +161,81 @@ def get_failed_response(payload, headers, **kwargs) -> Response:
     request.body = json.dumps(payload).encode()
     response = Response(status_code=409, request=request, content=json.dumps(response_dict).encode())
     return response
+
+
+# --- Bobbin helpers ---------------------------------------------------------
+
+BOBBIN_ORG_ID = 99
+
+
+def _get_bobbin_headers() -> dict:
+    return {
+        'User-Agent': 'Bobbin',
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {settings.bobbin_shared_key}',
+    }
+
+
+def get_dft_bobbin_endpoint_data_list(count: int = 1, organization_id: int = BOBBIN_ORG_ID, **kwargs) -> dict:
+    integrations = []
+    for i in range(1, count + 1):
+        integration_dict = {
+            'bobbin_endpoint_id': i,
+            'organization_id': organization_id,
+            'name': f'bobbin_endpoint_{i}',
+            'active': True,
+            'webhook_url': f'https://bobbin_endpoint_{i}.com',
+            'api_key': 'bobbin_key',
+            'events': [],
+        }
+        for k, v in kwargs.items():
+            integration_dict[k] = v
+        integrations.append(integration_dict)
+    return {'integrations': integrations, 'request_time': 1234567890}
+
+
+def get_dft_bobbin_endpoint_deletion_data(organization_id: int = BOBBIN_ORG_ID, **kwargs) -> dict:
+    endpoint_dict = {'bobbin_endpoint_id': 1, 'organization_id': organization_id}
+    for k, v in kwargs.items():
+        endpoint_dict[k] = v
+    return endpoint_dict
+
+
+def get_dft_bobbin_send_data(
+    organization_id: int = BOBBIN_ORG_ID, event_type: str = 'lesson.completed', **kwargs
+) -> dict:
+    send_dict = {
+        'event_type': event_type,
+        'organization_id': organization_id,
+        'data': {'id': 1, 'topic': 'Algebra'},
+        'request_time': 1234567890,
+    }
+    for k, v in kwargs.items():
+        send_dict[k] = v
+    return send_dict
+
+
+def get_dft_bobbin_webhook_log_data(bobbin_webhook_endpoint_id: int = 1, **kwargs) -> dict:
+    webhook_log_dict = {
+        'request_headers': json.dumps({'User-Agent': 'Bobbin', 'Content-Type': 'application/json'}),
+        'request_body': json.dumps(
+            {'event_type': 'lesson.completed', 'organization_id': BOBBIN_ORG_ID, 'data': {}, 'request_time': 1234567890}
+        ),
+        'response_headers': json.dumps({'Content-Type': 'application/json'}),
+        'response_body': json.dumps({'status_code': 200, 'message': 'success'}),
+        'status': WebhookStatus.SUCCESS,
+        'status_code': 200,
+        'bobbin_webhook_endpoint_id': bobbin_webhook_endpoint_id,
+    }
+    for k, v in kwargs.items():
+        webhook_log_dict[k] = v
+    return webhook_log_dict
+
+
+def create_bobbin_endpoint_from_dft_data(count: int = 1, **kwargs) -> list[BobbinWebhookEndpoint]:
+    integration_data = get_dft_bobbin_endpoint_data_list(count=count, **kwargs)
+    return [BobbinWebhookEndpoint(**integration) for integration in integration_data['integrations']]
+
+
+def create_bobbin_webhook_log_from_dft_data(**kwargs) -> BobbinWebhookLog:
+    return BobbinWebhookLog(**get_dft_bobbin_webhook_log_data(**kwargs))

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
 
     dft_timezone: str = 'Europe/London'
     tc2_shared_key: str = 'test-key'
+    # Separate shared key for the Bobbin (bobbin-api) product's /bobbin/* endpoints.
+    # A request authenticated with this key can only reach Bobbin routes / Bobbin tables.
+    bobbin_shared_key: str = 'test-key'
 
     # Round-robin dispatcher feature flag
     # So the dispatcher mode can be turned off gradually if we want to

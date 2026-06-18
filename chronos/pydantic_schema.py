@@ -67,6 +67,41 @@ class TCPublicProfileWebhook(BaseModel):
     request_time: Optional[int] = Field(validation_alias=AliasChoices('request_time', '_request_time'))
 
 
+class BobbinIntegration(BaseModel):
+    """A single Bobbin webhook endpoint to create or update in Chronos."""
+
+    bobbin_endpoint_id: int
+    organization_id: int
+    name: str
+    active: bool
+    webhook_url: str
+    api_key: str
+    events: list[str] = []
+
+
+class BobbinIntegrations(BaseModel):
+    """Batch of Bobbin endpoints mirrored from bobbin-api."""
+
+    integrations: list[BobbinIntegration]
+    request_time: int
+
+
+class BobbinDeleteIntegration(BaseModel):
+    """Identifies a Bobbin endpoint to delete (org-scoped)."""
+
+    bobbin_endpoint_id: int
+    organization_id: int
+
+
+class BobbinWebhookSend(BaseModel):
+    """A single Bobbin domain event to fan out to the org's matching endpoints."""
+
+    event_type: str
+    organization_id: int
+    data: dict
+    request_time: int
+
+
 class RequestData(BaseModel):
     """
     Pydantic model for the RequestData object

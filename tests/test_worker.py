@@ -69,6 +69,23 @@ class TestWorkers:
         assert webhook.status_code == 200
 
     @respx.mock
+    def test_send_webhook_user_agent_is_tutorcruncher(self, db: Session, client: TestClient, celery_session_worker):
+        """TC2 deliveries must still send User-Agent: TutorCruncher after the shared user_agent param was added."""
+        ep = create_endpoint_from_dft_data()[0]
+        db.add(ep)
+        db.commit()
+
+        payload = get_dft_webhook_data()
+        mock_request = respx.post(ep.webhook_url).mock(
+            return_value=get_successful_response(payload, _get_webhook_headers())
+        )
+
+        task_send_webhooks(json.dumps(payload))
+
+        assert mock_request.called
+        assert mock_request.calls[0].request.headers['user-agent'] == 'TutorCruncher'
+
+    @respx.mock
     def test_send_many_endpoints(self, db: Session, client: TestClient, celery_session_worker):
         endpoints = db.exec(select(WebhookEndpoint)).all()
         assert len(endpoints) == 0
