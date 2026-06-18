@@ -78,6 +78,22 @@ class BobbinIntegration(BaseModel):
     api_key: str
     events: list[str] = []
 
+    def to_endpoint_fields(self) -> dict:
+        """Map the bobbin-api wire shape onto the shared WebhookEndpoint columns.
+
+        Bobbin's organization_id is stored in branch_id and its endpoint id in bobbin_id;
+        tc_id stays NULL so this row is unambiguously a Bobbin endpoint.
+        """
+        return {
+            'bobbin_id': self.bobbin_endpoint_id,
+            'branch_id': self.organization_id,
+            'name': self.name,
+            'active': self.active,
+            'webhook_url': self.webhook_url,
+            'api_key': self.api_key,
+            'events': self.events,
+        }
+
 
 class BobbinIntegrations(BaseModel):
     """Batch of Bobbin endpoints mirrored from bobbin-api."""

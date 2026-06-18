@@ -16,7 +16,7 @@ from sqlmodel import Session, select
 from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
-from chronos.views import _extract_branch_id
+from chronos.views.tutorcruncher import _extract_branch_id
 from chronos.worker import _async_post_webhooks, cache, dispatch_branch_task, job_queue, task_send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,

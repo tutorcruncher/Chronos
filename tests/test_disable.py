@@ -126,7 +126,7 @@ def test_timeout_failure_can_trigger_disable_and_notify(client: TestClient, app_
 
     app_db.expire_all()
     app_db.refresh(ep)
-    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
+    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id).order_by(WebhookLog.id)).all()
     assert len(logs) == 10
     assert logs[-1].status == WebhookStatus.NO_RESPONSE
     assert ep.active is False

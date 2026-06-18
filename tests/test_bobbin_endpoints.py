@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from chronos.main import app
-from chronos.sql_models import BobbinWebhookEndpoint
+from chronos.sql_models import WebhookEndpoint
 from chronos.utils import settings
 from tests.test_helpers import (
     _get_bobbin_headers,
@@ -15,6 +15,7 @@ from tests.test_helpers import (
     get_dft_bobbin_endpoint_data_list,
     get_dft_bobbin_endpoint_deletion_data,
     get_dft_bobbin_send_data,
+    get_dft_endpoint_data_list,
 )
 
 create_update_url = app.url_path_for('create_update_bobbin_endpoint')
@@ -27,12 +28,13 @@ def test_create_bobbin_endpoint(session: Session, client: TestClient):
     r = client.post(create_update_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 200
     assert r.json() == {
-        'created': [{'message': 'BobbinWebhookEndpoint bobbin_endpoint_1 (org: 99) created'}],
+        'created': [{'message': 'WebhookEndpoint bobbin_endpoint_1 (org: 99) created'}],
         'updated': [],
     }
-    endpoint = session.exec(select(BobbinWebhookEndpoint)).one()
-    assert endpoint.bobbin_endpoint_id == 1
-    assert endpoint.organization_id == 99
+    endpoint = session.exec(select(WebhookEndpoint)).one()
+    assert endpoint.bobbin_id == 1
+    assert endpoint.branch_id == 99
+    assert endpoint.tc_id is None
     assert endpoint.events == []
 
 
@@ -45,9 +47,9 @@ def test_update_bobbin_endpoint(session: Session, client: TestClient):
     assert r.status_code == 200
     assert r.json() == {
         'created': [],
-        'updated': [{'message': 'BobbinWebhookEndpoint renamed (org: 99) updated'}],
+        'updated': [{'message': 'WebhookEndpoint renamed (org: 99) updated'}],
     }
-    endpoint = session.exec(select(BobbinWebhookEndpoint)).one()
+    endpoint = session.exec(select(WebhookEndpoint)).one()
     assert endpoint.name == 'renamed'
     assert endpoint.events == ['lesson.completed']
 
@@ -68,20 +70,20 @@ def test_delete_bobbin_endpoint(session: Session, client: TestClient):
     for _ in range(3):
         session.add(
             create_bobbin_webhook_log_from_dft_data(
-                bobbin_webhook_endpoint_id=ep_id, timestamp=datetime.now(UTC).replace(tzinfo=None)
+                webhook_endpoint_id=ep_id, timestamp=datetime.now(UTC).replace(tzinfo=None)
             )
         )
     session.commit()
 
     payload = get_dft_bobbin_endpoint_deletion_data()
-    with patch('chronos.bobbin_views.task_delete_bobbin_endpoint.delay') as mock_delay:
+    with patch('chronos.views.bobbin.task_delete_endpoint.delay') as mock_delay:
         r = client.post(delete_url, data=json.dumps(payload), headers=_get_bobbin_headers())
 
     assert r.status_code == 200
-    assert r.json() == {'message': f'BobbinWebhookEndpoint {ep.name} (org: 99) deletion initiated'}
+    assert r.json() == {'message': f'WebhookEndpoint {ep.name} (org: 99) deletion initiated'}
     mock_delay.assert_called_once_with(ep_id)
 
-    endpoint = session.exec(select(BobbinWebhookEndpoint).where(BobbinWebhookEndpoint.id == ep_id)).one()
+    endpoint = session.exec(select(WebhookEndpoint).where(WebhookEndpoint.id == ep_id)).one()
     assert endpoint.active is False
 
 
@@ -89,7 +91,7 @@ def test_delete_bobbin_endpoint_doesnt_exist(session: Session, client: TestClien
     payload = get_dft_bobbin_endpoint_deletion_data()
     r = client.post(delete_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 200
-    assert r.json()['message'].startswith('BobbinWebhookEndpoint 1 (org: 99) not found')
+    assert r.json()['message'].startswith('WebhookEndpoint 1 (org: 99) not found')
 
 
 def test_delete_bobbin_endpoint_invalid_data(session: Session, client: TestClient):
@@ -100,7 +102,7 @@ def test_delete_bobbin_endpoint_invalid_data(session: Session, client: TestClien
 
 def test_send_bobbin_webhook_initiated(session: Session, client: TestClient):
     payload = get_dft_bobbin_send_data()
-    with patch('chronos.bobbin_views.task_send_bobbin_webhooks.delay') as mock_delay:
+    with patch('chronos.views.bobbin.task_send_bobbin_webhooks.delay') as mock_delay:
         r = client.post(send_url, data=json.dumps(payload), headers=_get_bobbin_headers())
     assert r.status_code == 200
     assert r.json() == {'message': 'Sending bobbin webhook to endpoints has been successfully initiated.'}
@@ -136,8 +138,6 @@ def test_tc2_key_does_not_authorise_bobbin_routes(session: Session, client: Test
 
 
 def test_bobbin_key_does_not_authorise_tc2_routes(session: Session, client: TestClient):
-    from tests.test_helpers import get_dft_endpoint_data_list
-
     tc2_create_url = app.url_path_for('create_update_endpoint')
     payload = get_dft_endpoint_data_list()
     with (
@@ -159,7 +159,7 @@ def test_get_bobbin_logs(session: Session, client: TestClient):
     for _ in range(3):
         session.add(
             create_bobbin_webhook_log_from_dft_data(
-                bobbin_webhook_endpoint_id=ep.id, timestamp=datetime.now(UTC).replace(tzinfo=None)
+                webhook_endpoint_id=ep.id, timestamp=datetime.now(UTC).replace(tzinfo=None)
             )
         )
     session.commit()
@@ -181,7 +181,7 @@ def test_get_bobbin_logs_wrong_org_returns_empty(session: Session, client: TestC
     ep = create_bobbin_endpoint_from_dft_data()[0]
     session.add(ep)
     session.commit()
-    session.add(create_bobbin_webhook_log_from_dft_data(bobbin_webhook_endpoint_id=ep.id))
+    session.add(create_bobbin_webhook_log_from_dft_data(webhook_endpoint_id=ep.id))
     session.commit()
 
     url = app.url_path_for('get_bobbin_logs', organization_id=12345, bobbin_endpoint_id=1, page=0)

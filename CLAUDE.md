@@ -45,12 +45,14 @@ All TC-facing endpoints require `Authorization: Bearer <tc2_shared_key>`.
 | `POST /delete-endpoint` | Delete an endpoint by TC payload (`TCDeleteIntegration`: tc_id, branch_id). Deletes its logs first. |
 | `GET /{tc_id}/logs/{page}` | Paginated webhook logs for the endpoint with that `tc_id`. Returns up to 50 logs per page (internal query fetches 100, returns 50; count used for "more pages" hint). |
 
-Request/response shapes are defined in `chronos/pydantic_schema.py` (e.g. `TCWebhook`, `TCPublicProfileWebhook`, `TCIntegrations`, `TCDeleteIntegration`).
+The `/bobbin/*` routes mirror these for the Bobbin product (Bearer `bobbin_shared_key`): `POST /bobbin/create-update-endpoint`, `POST /bobbin/delete-endpoint`, `POST /bobbin/send-webhook`, `GET /bobbin/{organization_id}/{bobbin_endpoint_id}/logs/{page}`. See "Bobbin webhooks" below.
+
+Request/response shapes are defined in `chronos/pydantic_schema.py` (e.g. `TCWebhook`, `TCPublicProfileWebhook`, `TCIntegrations`, `TCDeleteIntegration`, `BobbinIntegrations`, `BobbinDeleteIntegration`, `BobbinWebhookSend`).
 
 ## Data Models (SQLModel / PostgreSQL)
 
-- **`WebhookEndpoint`** (`chronos/sql_models.py`): id, tc_id (unique), name, branch_id, webhook_url, api_key, active, timestamp.
-- **`WebhookLog`**: id, request_headers/body, response_headers/body (JSONB), status, status_code, timestamp, webhook_endpoint_id (FK). Written by the worker after each delivery attempt.
+- **`WebhookEndpoint`** (`chronos/sql_models.py`): id, tc_id (nullable, unique), bobbin_id (nullable), name, branch_id, webhook_url, api_key, active, events (JSONB, Bobbin event filter), timestamp. Shared by both products: a TC2 row has `tc_id` set / `bobbin_id` NULL with `branch_id` = TC branch; a Bobbin row has `bobbin_id` set / `tc_id` NULL with `branch_id` = Bobbin organization id. The populated id column discriminates the source (`(branch_id, bobbin_id)` is unique). See "Bobbin webhooks" below.
+- **`WebhookLog`**: id, request_headers/body, response_headers/body (JSONB), status, status_code, timestamp, webhook_endpoint_id (FK). Written by the worker after each delivery attempt; holds both TC2 and Bobbin logs.
 
 DB session: `chronos/db.py` – engine from `pg_dsn` (or `test_pg_dsn` when `settings.testing`). Tables created via `init_db()` (used by `chronos/scripts/create_db_tables.py`, which requires `dev_mode`).
 
@@ -141,13 +143,24 @@ After each delivery batch, Chronos checks `_check_and_disable_endpoint_if_needed
 
 Settings: `webhook_disable_failure_rate_threshold` (0.20), `webhook_disable_min_attempts` (10), `webhook_disable_failure_window_minutes` (60), `tc2_endpoint_disabled_url`.
 
+## Bobbin webhooks
+
+Chronos also delivers outbound webhooks for the **Bobbin** (bobbin-api) product via the `/bobbin/*` routes (`chronos/views/bobbin.py`), authenticated with a separate `bobbin_shared_key`. Bobbin **shares** TC2's `WebhookEndpoint` / `WebhookLog` tables instead of having its own:
+
+- A Bobbin endpoint row has `bobbin_id` set (the bobbin-api endpoint id), `tc_id` NULL, and stores the Bobbin `organization_id` in `branch_id`. `events` is the per-endpoint event filter (`[]` == all events).
+- TC2 sends filter `tc_id IS NOT NULL`; Bobbin sends filter `bobbin_id IS NOT NULL`. This discriminator means a TC2 branch and a Bobbin org that happen to share an integer never cross-deliver.
+- `chronos/pydantic_schema.py:BobbinIntegration.to_endpoint_fields()` maps the bobbin-api wire shape (`organization_id`, `bobbin_endpoint_id`) onto the shared columns.
+- Sending is a plain per-event Celery task (`task_send_bobbin_webhooks`): no round-robin, no per-event splitting, and no retry / auto-disable for now. Delivery, signing, log writing and endpoint deletion (`task_delete_endpoint`) reuse the TC2 helpers. There is one log-deletion sweep (`_delete_old_logs_job`) covering the shared `WebhookLog` table.
+
+There is **no Alembic**; deploying this to a live system requires manually `ALTER`ing the existing `webhookendpoint` table (add `bobbin_id` / `events`, drop `NOT NULL` on `tc_id`, add the `uq_branch_bobbin` constraint). See `README.md` for the exact statements.
+
 ## File Map (Summary)
 
 | Path | Role |
 |------|------|
 | `chronos/main.py` | FastAPI app, CORS, Sentry, Logfire, router mount, cron router. |
-| `chronos/views.py` | All HTTP endpoints; auth; enqueue or direct Celery for webhooks. |
-| `chronos/worker.py` | Celery app, Redis cache, JobQueue, `task_send_webhooks`, `_delete_old_logs_job`, `job_dispatcher_task`, `dispatch_branch_task`, APScheduler lifespan and delete-old-logs trigger. |
+| `chronos/views/` | HTTP endpoints, split by audience: `tutorcruncher.py` (TC2 routes, `main_router`), `bobbin.py` (`/bobbin/*` routes, `bobbin_router`), `shared.py` (bearer auth check + shared get-logs serialization). |
+| `chronos/worker.py` | Celery app, Redis cache, JobQueue, `task_send_webhooks`, `task_send_bobbin_webhooks`, `task_delete_endpoint`, `_delete_old_logs_job`, `job_dispatcher_task`, `dispatch_branch_task`, APScheduler lifespan and delete-old-logs trigger. |
 | `chronos/tasks/dispatcher.py` | `dispatch_cycle()` – round-robin from Redis branch queues to Celery. |
 | `chronos/tasks/queue.py` | `JobQueue` – Redis per-branch lists and Celery queue length. |
 | `chronos/tasks/worker_startup.py` | Start dispatcher task when dispatcher worker is ready. |

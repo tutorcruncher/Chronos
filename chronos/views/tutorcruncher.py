@@ -2,29 +2,23 @@ import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import nullslast
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Session, select
 
 from chronos.db import get_session
 from chronos.pydantic_schema import TCDeleteIntegration, TCIntegrations, TCPublicProfileWebhook, TCWebhook
-from chronos.sql_models import WebhookEndpoint, WebhookLog
+from chronos.sql_models import WebhookEndpoint
 from chronos.utils import settings
+from chronos.views.shared import check_authorisation, security, serialize_logs_response
 from chronos.worker import GLOBAL_BRANCH_ID, dispatch_branch_task, task_delete_endpoint, task_send_webhooks
 
 main_router = APIRouter()
-security = HTTPBearer()
 
 
-def check_authorisation(authorisation: HTTPAuthorizationCredentials):
-    """
-    Checks the authorisation token is correct
-    """
-    if authorisation.credentials != settings.tc2_shared_key:
-        raise HTTPException(status_code=403, detail='Authorisation token is invalid')
-    else:
-        return True
+def check_tc_authorisation(authorisation: HTTPAuthorizationCredentials) -> bool:
+    """Checks the authorisation token is correct"""
+    return check_authorisation(authorisation, settings.tc2_shared_key)
 
 
 def _extract_branch_id(webhook_payload: dict) -> int:
@@ -63,7 +57,7 @@ def send_webhooks(
     """
     Send webhooks to the relevant endpoints
     """
-    assert check_authorisation(authorisation)
+    assert check_tc_authorisation(authorisation)
     webhook_payload = webhook.model_dump()
 
     # Start job to send webhooks to endpoints on the workers
@@ -135,7 +129,7 @@ async def create_update_endpoint(
     :param db: Session object for the database
     :return:
     """
-    assert check_authorisation(authorisation)
+    assert check_tc_authorisation(authorisation)
 
     created, updated = [], []
 
@@ -171,7 +165,7 @@ async def delete_endpoint(
     :return:
     """
 
-    assert check_authorisation(authorisation)
+    assert check_tc_authorisation(authorisation)
     webhook_payload = delete_data.model_dump()
 
     # Check the endpoint exists and delete it
@@ -205,7 +199,7 @@ async def get_logs(
     :return:
     """
 
-    assert check_authorisation(authorisation)
+    assert check_tc_authorisation(authorisation)
 
     # Get the endpoint from the TC ID or return an error
     try:
@@ -214,37 +208,7 @@ async def get_logs(
     except NoResultFound as e:
         return {'message': f'WebhookEndpoint with TC ID: {tc_id} not found: {e}', 'logs': [], 'count': 0}
 
-    offset = page * 50
-
-    # Get the Logs and related endpoint
-    logs = db.exec(
-        select(WebhookLog)
-        .where(WebhookLog.webhook_endpoint_id == endpoint.id)
-        .order_by(nullslast(WebhookLog.timestamp.desc()))
-        .offset(offset)
-        .limit(100)
-    ).all()
-    list_of_webhooks = [
-        {
-            'request_headers': json.loads(log.request_headers),
-            'request_body': json.loads(log.request_body),
-            'response_headers': json.loads(log.response_headers),
-            'response_body': json.loads(log.response_body),
-            'status': log.status,
-            'status_code': log.status_code,
-            'timestamp': log.timestamp,
-            'url': endpoint.webhook_url,
-        }
-        for log in logs
-    ]
-
-    # If another page is available this will show in TC2 without extra slow queries
-    # Its a false count that just indicates more pages available
-    count = offset + len(list_of_webhooks)
-    if count <= offset:
-        return {'message': f'No logs found for page: {page}', 'logs': [], 'count': count}
-
-    return {'logs': list_of_webhooks[:50], 'count': count}
+    return serialize_logs_response(db, endpoint, page)
 
 
 @main_router.get('/', description='Index page for Chronos')

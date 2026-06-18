@@ -5,10 +5,9 @@ import sentry_sdk
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from chronos.bobbin_views import bobbin_router
 from chronos.logging import config
 from chronos.utils import settings as _app_settings
-from chronos.views import main_router
+from chronos.views import bobbin_router, main_router
 from chronos.worker import cronjob, lifespan
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

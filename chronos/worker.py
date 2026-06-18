@@ -24,7 +24,7 @@ from sqlmodel import Session, select
 
 from chronos.db import engine
 from chronos.pydantic_schema import RequestData
-from chronos.sql_models import BobbinWebhookEndpoint, BobbinWebhookLog, WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.queue import JobQueue
 from chronos.utils import app_logger, settings
 
@@ -144,9 +144,7 @@ def _split_payloads(loaded_payload: dict) -> list[dict]:
     return payloads_to_send
 
 
-def _build_signed_request(
-    endpoint: 'WebhookEndpoint | BobbinWebhookEndpoint', payload_to_send: dict
-) -> tuple[bytes, str]:
+def _build_signed_request(endpoint: WebhookEndpoint, payload_to_send: dict) -> tuple[bytes, str]:
     """Encode payload as JSON and sign it with the endpoint's api_key using HMAC-SHA256."""
     body = json.dumps(payload_to_send).encode()
     sig = hmac.new(endpoint.api_key.encode(), body, hashlib.sha256)
@@ -207,7 +205,7 @@ def _request_data_to_log(response: RequestData) -> WebhookLog:
     )
 
 
-def _get_endpoint_url(endpoint: 'WebhookEndpoint | BobbinWebhookEndpoint', url_extension: str | None) -> str | None:
+def _get_endpoint_url(endpoint: WebhookEndpoint, url_extension: str | None) -> str | None:
     """Return the delivery URL for an endpoint, appending url_extension if provided.
 
     Returns None (and logs an error) if the URL scheme is not in acceptable_url_schemes.
@@ -226,15 +224,14 @@ def _get_endpoint_url(endpoint: 'WebhookEndpoint | BobbinWebhookEndpoint', url_e
 
 async def _send_single_webhook(
     client: AsyncClient,
-    endpoint: 'WebhookEndpoint | BobbinWebhookEndpoint',
+    endpoint: WebhookEndpoint,
     payload_to_send: dict,
     url_extension: str | None,
     user_agent: str = 'TutorCruncher',
 ) -> RequestData | None:
     """Build a signed request and POST it. Returns None if the URL is invalid.
 
-    Works for both WebhookEndpoint (TC2) and BobbinWebhookEndpoint (they share the
-    webhook_url / api_key / id attributes the helpers below rely on).
+    Serves both TC2 and Bobbin sends (Bobbin callers pass user_agent='Bobbin').
     """
     url = _get_endpoint_url(endpoint, url_extension)
     if url:
@@ -474,9 +471,12 @@ def task_send_webhooks(payload: str, url_extension: str = None):
     lf_span = 'Sending webhooks for branch: {branch_id=}'
     with logfire.span(lf_span, branch_id=branch_id):
         with Session(engine) as db:
-            # Get all the endpoints for the branch
+            # Get all the endpoints for the branch. tc_id discriminates TC2 rows from Bobbin rows
+            # that may share a branch_id integer.
             endpoints_query = select(WebhookEndpoint).where(
-                WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active
+                WebhookEndpoint.branch_id == branch_id,
+                WebhookEndpoint.active,
+                WebhookEndpoint.tc_id.is_not(None),
             )
             endpoints = db.exec(endpoints_query).all()
 
@@ -612,28 +612,16 @@ def _delete_old_logs_job():
 
 
 # ---------------------------------------------------------------------------
-# Bobbin (bobbin-api) webhooks — separate tables, separate key, no round-robin.
-# Shares only webhook_request/_send_single_webhook (signing + delivery) with TC2.
+# Bobbin (bobbin-api) webhooks — same WebhookEndpoint / WebhookLog tables as TC2,
+# scoped by branch_id (= organization_id) with a non-null bobbin_id. Separate shared key,
+# no round-robin, no per-event splitting, no retry / auto-disable for now.
+# Reuses the TC2 signing, delivery, logging and delete helpers above.
 # ---------------------------------------------------------------------------
 
 BOBBIN_USER_AGENT = 'Bobbin'
-BOBBIN_DELETE_JOBS_KEY = 'delete_old_bobbin_logs_job'
 
 
-def _request_data_to_bobbin_log(response: RequestData) -> BobbinWebhookLog:
-    """Convert a completed RequestData into a BobbinWebhookLog ready for DB insertion."""
-    return BobbinWebhookLog(
-        bobbin_webhook_endpoint_id=response.endpoint_id,
-        request_headers=response.request_headers,
-        request_body=response.request_body,
-        response_headers=response.response_headers,
-        response_body=response.response_body,
-        status=_get_webhook_status(response),
-        status_code=response.status_code,
-    )
-
-
-def _bobbin_endpoint_subscribed(endpoint: BobbinWebhookEndpoint, event_type: str) -> bool:
+def _bobbin_endpoint_subscribed(endpoint: WebhookEndpoint, event_type: str) -> bool:
     """True if the endpoint subscribes to this event (empty events filter == all events)."""
     return not endpoint.events or event_type in endpoint.events
 
@@ -665,7 +653,7 @@ async def _async_post_bobbin_webhooks(endpoints, payload: str):
                 continue
             if not response.successful_response:
                 app_logger.info('No response from bobbin endpoint %s', response.endpoint_id)
-            webhook_logs.append(_request_data_to_bobbin_log(response))
+            webhook_logs.append(_request_data_to_log(response))
             if _is_success(response):
                 total_success += 1
             else:
@@ -686,8 +674,11 @@ def task_send_bobbin_webhooks(payload: str, organization_id: int) -> None:
     app_logger.info('Starting send bobbin webhook task for org %s, event %s', organization_id, event_type)
     with logfire.span('Sending bobbin webhooks for org: {organization_id=}', organization_id=organization_id):
         with Session(engine) as db:
-            endpoints_query = select(BobbinWebhookEndpoint).where(
-                BobbinWebhookEndpoint.organization_id == organization_id, BobbinWebhookEndpoint.active
+            # bobbin_id discriminates Bobbin rows from TC2 rows that may share a branch_id integer.
+            endpoints_query = select(WebhookEndpoint).where(
+                WebhookEndpoint.branch_id == organization_id,
+                WebhookEndpoint.active,
+                WebhookEndpoint.bobbin_id.is_not(None),
             )
             endpoints = [ep for ep in db.exec(endpoints_query).all() if _bobbin_endpoint_subscribed(ep, event_type)]
 
@@ -702,89 +693,6 @@ def task_send_bobbin_webhooks(payload: str, organization_id: int) -> None:
         total_success,
         total_failed,
     )
-
-
-@celery_app.task
-def task_delete_bobbin_endpoint(endpoint_id: int) -> None:
-    """Delete a Bobbin endpoint and its logs asynchronously in safe batches."""
-    with Session(engine) as db:
-        endpoint = db.get(BobbinWebhookEndpoint, endpoint_id)
-        if endpoint is None:
-            app_logger.info('Bobbin endpoint %s already deleted before async cleanup started', endpoint_id)
-            return
-
-        total_deleted = 0
-        delete_limit = WEBHOOK_LOG_DELETE_BATCH_SIZE
-        while True:
-            log_ids = db.exec(
-                select(BobbinWebhookLog.id)
-                .where(BobbinWebhookLog.bobbin_webhook_endpoint_id == endpoint_id)
-                .limit(delete_limit)
-            ).all()
-            if not log_ids:
-                break
-
-            delete_statement = delete(BobbinWebhookLog).where(BobbinWebhookLog.id.in_(log_id for log_id in log_ids))
-            db.exec(delete_statement)
-            db.commit()
-            total_deleted += len(log_ids)
-
-            del log_ids
-            del delete_statement
-            gc.collect()
-
-        endpoint = db.get(BobbinWebhookEndpoint, endpoint_id)
-        if endpoint is None:
-            app_logger.info('Bobbin endpoint %s already deleted during async cleanup', endpoint_id)
-            return
-
-        db.delete(endpoint)
-        db.commit()
-        app_logger.info('Deleted bobbin endpoint %s after removing %s logs', endpoint_id, total_deleted)
-
-
-@scheduler.scheduled_job('interval', hours=1)
-async def delete_old_bobbin_logs_job():
-    """Hourly single-flight sweep wiping BobbinWebhookLogs older than 15 days."""
-    if cache.get(BOBBIN_DELETE_JOBS_KEY):
-        return
-    cache.set(BOBBIN_DELETE_JOBS_KEY, 'True', ex=1200)
-    _delete_old_bobbin_logs_job.delay()
-
-
-def get_bobbin_log_count(date_to_delete_before: datetime) -> int:
-    """Count Bobbin logs older than the cutoff."""
-    with Session(engine) as db:
-        return db.exec(
-            select(func.count()).select_from(BobbinWebhookLog).where(BobbinWebhookLog.timestamp < date_to_delete_before)
-        ).one()
-
-
-@celery_app.task
-def _delete_old_bobbin_logs_job():
-    with Session(engine) as db:
-        date_to_delete_before = datetime.utcnow() - timedelta(days=15)
-        count = get_bobbin_log_count(date_to_delete_before)
-        delete_limit = WEBHOOK_LOG_DELETE_BATCH_SIZE
-        while count > 0:
-            app_logger.info(f'Deleting {count} bobbin logs')
-            logs_to_delete = db.exec(
-                select(BobbinWebhookLog.id)
-                .where(BobbinWebhookLog.timestamp < date_to_delete_before)
-                .limit(delete_limit)
-            ).all()
-            delete_statement = delete(BobbinWebhookLog).where(
-                BobbinWebhookLog.id.in_(log_id for log_id in logs_to_delete)
-            )
-            db.exec(delete_statement)
-            db.commit()
-            count -= delete_limit
-
-            del logs_to_delete
-            del delete_statement
-            gc.collect()
-
-    cache.delete(BOBBIN_DELETE_JOBS_KEY)
 
 
 def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:

@@ -60,17 +60,23 @@ To set up the Chronos system in render follow these steps:
 # Bobbin webhooks
 
 Chronos also serves the Bobbin (bobbin-api) product's outbound webhooks via the `/bobbin/*`
-routes. These live in `chronos/bobbin_views.py` and use their own tables
-(`bobbinwebhookendpoint` / `bobbinwebhooklog`), their own shared key (`bobbin_shared_key`), and a
-plain per-event Celery task (no round-robin). TC2's tables, routes, key and dispatcher are
-untouched.
+routes (in `chronos/views/bobbin.py`). Bobbin shares TC2's `WebhookEndpoint` / `WebhookLog`
+tables rather than having its own: a Bobbin row stores its organization id in `branch_id`, its
+endpoint id in `bobbin_id`, and leaves `tc_id` NULL (TC2 rows are the mirror — `tc_id` set,
+`bobbin_id` NULL). The populated id column discriminates the two products, so a TC2 branch and a
+Bobbin org that share an integer never cross-deliver. Bobbin keeps its own shared key
+(`bobbin_shared_key`) and a plain per-event Celery task (no round-robin, no per-event splitting,
+no retry / auto-disable for now). TC2's routes, key and dispatcher are untouched.
 
 When deploying the Bobbin support to an existing live system:
 
-1. Deploy the code (the new models are defined in `chronos/sql_models.py`).
-2. **Manually create the two new tables on the live Postgres** — Chronos has no Alembic and
-   `create_all` only creates *missing* tables, so this is a one-off human step. It is a pure
-   additive `CREATE TABLE` (no `ALTER`, no constraint change, no lock on existing tables). Either
-   run `python -m chronos.scripts.create_db_tables` against the prod DSN (idempotent — it skips
-   the existing tables), or hand-run the equivalent `CREATE TABLE` statements via `psql`.
+1. Deploy the code (the unified model lives in `chronos/sql_models.py`).
+2. **Manually migrate the live `webhookendpoint` table** — Chronos has no Alembic and `create_all`
+   never `ALTER`s existing tables, so this is a one-off human step against the prod DSN:
+   - `ALTER TABLE webhookendpoint ADD COLUMN bobbin_id integer;`
+   - `ALTER TABLE webhookendpoint ADD COLUMN events jsonb NOT NULL DEFAULT '[]'::jsonb;`
+   - `ALTER TABLE webhookendpoint ALTER COLUMN tc_id DROP NOT NULL;`
+   - `ALTER TABLE webhookendpoint ADD CONSTRAINT uq_branch_bobbin UNIQUE (branch_id, bobbin_id);`
+
+   (`webhooklog` is unchanged — Bobbin deliveries log into it as-is.)
 3. Set `bobbin_shared_key` as an environment variable on the **web and worker** services.
