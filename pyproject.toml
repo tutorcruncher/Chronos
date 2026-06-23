@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Chronos webhook and job service"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.18.4",
     "apscheduler==3.11.2",
     "celery==5.6.3",
     "cryptography==48.0.0",
@@ -30,6 +31,10 @@ dev = [
     "pytest-cov==7.1.0",
     "ruff==0.15.14",
 ]
+
+[tool.alembic]
+    script_location = "migrations"
+    file_template = "%%(year)s%%(month).2d%%(day).2d%%(hour).2d%%(minute).2d_%%(rev)s"
 
 [tool.ruff]
     line-length = 120
