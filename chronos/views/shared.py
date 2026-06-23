@@ -1,4 +1,5 @@
 import json
+import secrets
 
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -19,7 +20,8 @@ def check_authorisation(authorisation: HTTPAuthorizationCredentials, expected_ke
     The caller passes the key for its own product so a TC2 token can't reach Bobbin routes
     and vice versa.
     """
-    if authorisation.credentials != expected_key:
+    # compare_digest avoids a timing oracle: a plain != short-circuits on the first differing byte.
+    if not secrets.compare_digest(authorisation.credentials, expected_key):
         raise HTTPException(status_code=403, detail='Authorisation token is invalid')
     return True
 
