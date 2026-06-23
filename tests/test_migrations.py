@@ -7,6 +7,7 @@ fails CI rather than silently diverging from production.
 """
 
 import pytest
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
@@ -16,7 +17,6 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 
 import chronos.sql_models  # noqa: F401  (registers the tables on SQLModel.metadata)
-from alembic import command
 from chronos.utils import settings
 
 
@@ -42,15 +42,21 @@ def scratch_db_url():
         admin_engine.dispose()
 
 
-def test_migrations_match_models(scratch_db_url):
-    config = Config('alembic.ini')
-    config.set_main_option('sqlalchemy.url', str(scratch_db_url))
+def test_migrations_match_models(scratch_db_url, monkeypatch):
+    # env.py reads the DSN from settings; point both at the scratch DB regardless of TESTING.
+    # render_as_string(hide_password=False) — str(URL) masks the password as '***', which fails auth.
+    dsn = scratch_db_url.render_as_string(hide_password=False)
+    monkeypatch.setattr(settings, 'pg_dsn', dsn)
+    monkeypatch.setattr(settings, 'test_pg_dsn', dsn)
+
+    config = Config()
+    config.set_main_option('script_location', 'migrations')
     command.upgrade(config, 'head')
 
     engine = create_engine(scratch_db_url, poolclass=NullPool)
     try:
         with engine.connect() as conn:
-            context = MigrationContext.configure(conn)
+            context = MigrationContext.configure(conn, opts={'compare_type': True, 'compare_server_default': True})
             diffs = compare_metadata(context, SQLModel.metadata)
     finally:
         engine.dispose()

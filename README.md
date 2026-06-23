@@ -32,9 +32,10 @@ You will need to export dev_mode = True to create tables
 
 # Database migrations
 
-The schema is managed with **Alembic** (config in `alembic.ini`, migrations in `alembic/versions/`).
-`alembic/env.py` reads the DSN from `chronos.settings` (`pg_dsn`, or `test_pg_dsn` when `TESTING`),
-so you don't pass `--url` for normal use.
+The schema is managed with **Alembic**. There is no `alembic.ini` — config lives in `pyproject.toml`
+under `[tool.alembic]` (`script_location = "migrations"`), which Alembic 1.18 discovers automatically.
+Migrations live in `migrations/versions/` with timestamped filenames. `migrations/env.py` reads the
+DSN from `chronos.settings` (`pg_dsn`, or `test_pg_dsn` when `TESTING`), so you don't pass `--url`.
 
 * Apply all migrations: `make migrate` (i.e. `alembic upgrade head`).
 * After changing a model in `chronos/sql_models.py`, generate a migration against a local DB:

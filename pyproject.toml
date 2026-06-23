@@ -32,6 +32,10 @@ dev = [
     "ruff==0.15.14",
 ]
 
+[tool.alembic]
+    script_location = "migrations"
+    file_template = "%%(year)s%%(month).2d%%(day).2d%%(hour).2d%%(minute).2d_%%(rev)s"
+
 [tool.ruff]
     line-length = 120
 
