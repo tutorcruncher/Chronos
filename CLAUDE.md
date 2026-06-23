@@ -52,7 +52,9 @@ Request/response shapes are defined in `chronos/pydantic_schema.py` (e.g. `TCWeb
 - **`WebhookEndpoint`** (`chronos/sql_models.py`): id, tc_id (unique), name, branch_id, webhook_url, api_key, active, timestamp.
 - **`WebhookLog`**: id, request_headers/body, response_headers/body (JSONB), status, status_code, timestamp, webhook_endpoint_id (FK). Written by the worker after each delivery attempt.
 
-DB session: `chronos/db.py` – engine from `pg_dsn` (or `test_pg_dsn` when `settings.testing`). Tables created via `init_db()` (used by `chronos/scripts/create_db_tables.py`, which requires `dev_mode`).
+DB session: `chronos/db.py` – engine from `pg_dsn` (or `test_pg_dsn` when `settings.testing`).
+
+Schema is managed with **Alembic** (`alembic.ini`, `alembic/`). `alembic/env.py` pulls the DSN from `chronos.settings` and uses `SQLModel.metadata` as the autogenerate target. Apply migrations with `make migrate` (`alembic upgrade head`); `make reset-db` recreates the DBs then migrates. After a model change in `chronos/sql_models.py`, run `uv run alembic revision --autogenerate -m "…"` and review the result. `tests/test_migrations.py` fails CI if migrations drift from the models. On Render, `make migrate` is the web service's pre-deploy command so it runs before new code starts. (Tests themselves still build their schema with `SQLModel.metadata.create_all` in `tests/conftest.py` for speed.)
 
 ## Flow: From TC Request to Client Delivery
 
@@ -153,10 +155,10 @@ Settings: `webhook_disable_failure_rate_threshold` (0.20), `webhook_disable_min_
 | `chronos/tasks/worker_startup.py` | Start dispatcher task when dispatcher worker is ready. |
 | `chronos/sql_models.py` | `WebhookEndpoint`, `WebhookLog`. |
 | `chronos/pydantic_schema.py` | Request/response models for API and job payloads. |
-| `chronos/db.py` | Engine, `init_db`, `get_session`. |
+| `chronos/db.py` | Engine, `get_session`. |
 | `chronos/settings.py` | Pydantic Settings. |
 | `chronos/observability.py` | Logfire configure and instrument. |
-| `chronos/scripts/create_db_tables.py` | Calls `init_db()` when `dev_mode`. |
+| `alembic/env.py`, `alembic/versions/` | Alembic config (DSN from settings, `SQLModel.metadata` target) and migration scripts. |
 | `chronos/scripts/mock_webhook_receiver.py` | Local FastAPI receiver for manual lab (`/hook`, `/lab-ext/{segment}`, TC2 notify route). |
 | `chronos/scripts/webhook_retry_disable_lab.py` | Manual lab: `python -m chronos.scripts.webhook_retry_disable_lab` runs all retry/disable checks in one go; `--runbook` prints setup only. |
 

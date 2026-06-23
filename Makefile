@@ -1,4 +1,4 @@
-.PHONY: install install-dev lint format test reset-db create-db-tables run-server-dev run-server run-worker run-dispatcher run-webhook-lab-receiver
+.PHONY: install install-dev lint format test migrate reset-db run-server-dev run-server run-worker run-dispatcher run-webhook-lab-receiver
 
 # Install dependencies (normal packages only)
 install:
@@ -22,17 +22,17 @@ format:
 test:
 	TESTING=True uv run pytest --cov=chronos
 
+# Apply database migrations (run on every deploy, before the new code starts)
+migrate:
+	uv run alembic upgrade head
+
 # Reset database
 reset-db:
 	psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS chronos"
 	psql -h localhost -U postgres -c "CREATE DATABASE chronos"
 	psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS test_chronos"
 	psql -h localhost -U postgres -c "CREATE DATABASE test_chronos"
-	uv run python -m chronos.scripts.create_db_tables
-
-# Create database tables
-create-db-tables:
-	uv run python -m chronos.scripts.create_db_tables
+	uv run alembic upgrade head
 
 # Run development server
 run-server-dev:

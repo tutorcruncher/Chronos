@@ -26,9 +26,27 @@ To set up the Chronos system locally follow these steps:
 Set pg_dsn and test_pg_dsn 
 You will need to export dev_mode = True to create tables
 
-4. Create the DB in Postgres by calling `make reset-db`
+4. Create the DB in Postgres by calling `make reset-db` (drops/creates the DBs and runs `make migrate`)
 5. Start the server using `make run-server-dev`
 6. Start the celery worker with `make run-worker`
+
+# Database migrations
+
+The schema is managed with **Alembic** (config in `alembic.ini`, migrations in `alembic/versions/`).
+`alembic/env.py` reads the DSN from `chronos.settings` (`pg_dsn`, or `test_pg_dsn` when `TESTING`),
+so you don't pass `--url` for normal use.
+
+* Apply all migrations: `make migrate` (i.e. `alembic upgrade head`).
+* After changing a model in `chronos/sql_models.py`, generate a migration against a local DB:
+  `uv run alembic revision --autogenerate -m "describe the change"`, then review the generated file
+  before committing (autogenerate is a starting point, not gospel).
+* `tests/test_migrations.py` applies every migration to a throwaway DB and fails if the result
+  doesn't match the models — so a model change without its migration breaks CI.
+
+> **Adopting Alembic on a pre-existing live DB:** if the `webhookendpoint`/`webhooklog` tables were
+> created by the old `create_all` path (no `alembic_version` table yet), baseline the DB once with
+> `alembic stamp head` instead of `alembic upgrade head`, so Alembic records the current revision
+> without trying to re-create existing tables. Fresh databases just use `make migrate`.
 
 # SetUp a new live system
 To set up the Chronos system in render follow these steps:
@@ -41,6 +59,9 @@ To set up the Chronos system in render follow these steps:
 2. Setup web service:
     * Set to build from this repo and deploy from master branch
     * Set `make install` as the build command
+    * Set `make migrate` as the **pre-deploy command** so migrations run against the live DB before
+      the new code starts serving (Render runs the pre-deploy command once, after build, before the
+      new instances go live — set it on the web service only so it runs a single time per deploy)
     * Set `make run-server` as the start command
 3. Setup worker service:
     * Set to build from this repo and deploy from master branch
