@@ -4,6 +4,7 @@ from httpx import Response
 from requests import Request
 
 from chronos.main import app
+from chronos.pydantic_schema import BobbinIntegration, TCIntegration
 from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.utils import settings
 
@@ -130,10 +131,10 @@ def _get_endpoint_headers() -> dict:
 
 def create_endpoint_from_dft_data(count: int = 1, **kwargs) -> list[WebhookEndpoint]:
     integration_data = get_dft_endpoint_data_list(count=count, **kwargs)
-    if len(integration_data['integrations']) == 1:
-        return [WebhookEndpoint(**integration_data['integrations'][0])]
-    else:
-        return [WebhookEndpoint(**integration) for integration in integration_data['integrations']]
+    return [
+        WebhookEndpoint(**TCIntegration(**integration).to_endpoint_fields())
+        for integration in integration_data['integrations']
+    ]
 
 
 def create_webhook_log_from_dft_data(**kwargs) -> WebhookLog:
@@ -161,3 +162,85 @@ def get_failed_response(payload, headers, **kwargs) -> Response:
     request.body = json.dumps(payload).encode()
     response = Response(status_code=409, request=request, content=json.dumps(response_dict).encode())
     return response
+
+
+# --- Bobbin helpers ---------------------------------------------------------
+
+BOBBIN_ORG_ID = 99
+
+
+def _get_bobbin_headers() -> dict:
+    return {
+        'User-Agent': 'Bobbin',
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {settings.bobbin_shared_key}',
+    }
+
+
+def get_dft_bobbin_endpoint_data(**kwargs) -> dict:
+    """A single Bobbin integration payload (the create-update endpoint takes one object)."""
+    bobbin_endpoint_id = kwargs.get('bobbin_endpoint_id', 1)
+    integration_dict = {
+        'bobbin_endpoint_id': bobbin_endpoint_id,
+        'organization_id': BOBBIN_ORG_ID,
+        'name': f'bobbin_endpoint_{bobbin_endpoint_id}',
+        'active': True,
+        'webhook_url': f'https://bobbin_endpoint_{bobbin_endpoint_id}.com',
+        'api_key': 'bobbin_key',
+    }
+    integration_dict.update(kwargs)
+    return integration_dict
+
+
+def get_dft_bobbin_endpoint_deletion_data(organization_id: int = BOBBIN_ORG_ID, **kwargs) -> dict:
+    endpoint_dict = {'bobbin_endpoint_id': 1, 'organization_id': organization_id}
+    for k, v in kwargs.items():
+        endpoint_dict[k] = v
+    return endpoint_dict
+
+
+def get_dft_bobbin_send_data(
+    organization_id: int = BOBBIN_ORG_ID, event_type: str = 'lesson.completed', **kwargs
+) -> dict:
+    send_dict = {
+        'event_type': event_type,
+        'organization_id': organization_id,
+        'data': {'id': 1, 'topic': 'Algebra'},
+        'request_time': 1234567890,
+    }
+    for k, v in kwargs.items():
+        send_dict[k] = v
+    return send_dict
+
+
+def get_dft_bobbin_webhook_log_data(webhook_endpoint_id: int = 1, **kwargs) -> dict:
+    webhook_log_dict = {
+        'request_headers': json.dumps({'User-Agent': 'Bobbin', 'Content-Type': 'application/json'}),
+        'request_body': json.dumps(
+            {'event_type': 'lesson.completed', 'organization_id': BOBBIN_ORG_ID, 'data': {}, 'request_time': 1234567890}
+        ),
+        'response_headers': json.dumps({'Content-Type': 'application/json'}),
+        'response_body': json.dumps({'status_code': 200, 'message': 'success'}),
+        'status': WebhookStatus.SUCCESS,
+        'status_code': 200,
+        'webhook_endpoint_id': webhook_endpoint_id,
+    }
+    for k, v in kwargs.items():
+        webhook_log_dict[k] = v
+    return webhook_log_dict
+
+
+def create_bobbin_endpoint_from_dft_data(count: int = 1, **kwargs) -> list[WebhookEndpoint]:
+    """Build unified WebhookEndpoint rows from the Bobbin wire shape (mapped via BobbinIntegration)."""
+    return [
+        WebhookEndpoint(
+            **BobbinIntegration(
+                **get_dft_bobbin_endpoint_data(**{'bobbin_endpoint_id': i, **kwargs})
+            ).to_endpoint_fields()
+        )
+        for i in range(1, count + 1)
+    ]
+
+
+def create_bobbin_webhook_log_from_dft_data(**kwargs) -> WebhookLog:
+    return WebhookLog(**get_dft_bobbin_webhook_log_data(**kwargs))

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.utils import settings
 from chronos.worker import _webhook_host_is_exempt_from_auto_disable, task_retry_single_webhook, task_send_webhooks
 from tests.test_helpers import (
@@ -43,9 +43,10 @@ def cleanup_disable_data(app_db: Session):
 # Use branch_id 199 so disable tests don't share branch 99 with retry tests (avoids cross-test disables).
 def _create_endpoint(app_db: Session, branch_id: int = 199, active: bool = True, **kwargs) -> WebhookEndpoint:
     ep = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=kwargs.get('tc_id', 200),
         name=kwargs.get('name', 'disable-test'),
-        branch_id=branch_id,
+        org_id=branch_id,
         webhook_url=kwargs.get('webhook_url', 'https://disable-test.example.com/hook'),
         api_key=kwargs.get('api_key', 'secret'),
         active=active,
@@ -126,7 +127,7 @@ def test_timeout_failure_can_trigger_disable_and_notify(client: TestClient, app_
 
     app_db.expire_all()
     app_db.refresh(ep)
-    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
+    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id).order_by(WebhookLog.id)).all()
     assert len(logs) == 10
     assert logs[-1].status == WebhookStatus.NO_RESPONSE
     assert ep.active is False

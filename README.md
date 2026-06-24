@@ -78,3 +78,45 @@ To set up the Chronos system in render follow these steps:
 7. Setup shared environment variables from internally created postgres and redis instance
     * pg_dsn
     * redis_url
+
+# Bobbin webhooks
+
+Chronos also serves the Bobbin (bobbin-api) product's outbound webhooks via the `/bobbin/*`
+routes (in `chronos/views/bobbin.py`). Bobbin shares TC2's `WebhookEndpoint` / `WebhookLog`
+tables rather than having its own. A required `provider` column (`'tutorcruncher'` | `'bobbin'`)
+discriminates the two products; the generic `org_id` column holds the TC2 branch **or** the Bobbin
+organization id, and `bobbin_id` holds the bobbin-api endpoint id (`tc_id` stays NULL for Bobbin
+rows). Senders filter on `provider`, so a TC2 branch and a Bobbin org that share an `org_id` integer
+never cross-deliver.
+
+Only the **ingest** differs per product: Bobbin has its own shared key (`bobbin_shared_key`), its own
+routes, and enqueues directly (no round-robin). Everything downstream — the single `task_send_webhooks`
+delivery task, signing, retries, auto-disable, and log cleanup — is shared. Auto-disable notifications
+are per-provider: TC2 posts to `tc2_endpoint_disabled_url`, Bobbin to `bobbin_endpoint_disabled_url`
+(unset ⇒ the endpoint is disabled silently).
+
+When deploying to an existing live system:
+
+> **⚠️ Migrate before you deploy.** The new code reads `provider`/`org_id`/`bobbin_id` on every send
+> and CRUD route, but Chronos has no Alembic and `create_all` never `ALTER`s an existing table. The
+> `branch_id`→`org_id` rename is **not backward-compatible with the currently-running code**: the old
+> code references `branch_id`, the new code references `org_id`, so there is no column name that
+> satisfies both. Render fires all deploy hooks together on a git tag with no release phase, so if you
+> push the tag first the table still has `branch_id` and no `provider`/`bobbin_id` — every webhook
+> delivery and endpoint CRUD 500s, and the `org_id` lookup sequential-scans until `uq_org_bobbin`
+> exists. Run the DDL against prod **before** the tag, and do the cutover during low traffic (the old
+> code breaks the moment `branch_id` is renamed, so the migrate→deploy gap is a brief downtime window).
+
+1. **Manually migrate the live `webhookendpoint` table** against the prod DSN, before pushing the tag
+   that triggers the deploy. Existing rows are all TC2, so the one-off `DEFAULT` backfills them
+   correctly (the model field itself is required):
+   - `ALTER TABLE webhookendpoint ADD COLUMN provider varchar NOT NULL DEFAULT 'tutorcruncher';`
+   - `ALTER TABLE webhookendpoint RENAME COLUMN branch_id TO org_id;`
+   - `ALTER TABLE webhookendpoint ADD COLUMN bobbin_id integer;`
+   - `ALTER TABLE webhookendpoint ALTER COLUMN tc_id DROP NOT NULL;`
+   - `ALTER TABLE webhookendpoint ADD CONSTRAINT uq_org_bobbin UNIQUE (org_id, bobbin_id);`
+
+   (`webhooklog` is unchanged — Bobbin deliveries log into it as-is.)
+2. Push the tag to deploy the code (the unified model lives in `chronos/sql_models.py`).
+3. Set `bobbin_shared_key` (and optionally `bobbin_endpoint_disabled_url`) as environment variables on
+   the **web and worker** services.

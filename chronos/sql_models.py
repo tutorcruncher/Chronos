@@ -2,6 +2,7 @@ import datetime
 from enum import StrEnum
 from typing import Optional
 
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -12,15 +13,33 @@ class WebhookStatus(StrEnum):
     UNEXPECTED_RESPONSE = 'Unexpected response'
 
 
+class Provider(StrEnum):
+    """The source product an endpoint (and its webhooks) belong to."""
+
+    TC2 = 'tutorcruncher'
+    BOBBIN = 'bobbin'
+
+
 class WebhookEndpoint(SQLModel, table=True):
-    """
-    The model for the webhook endpoint table
+    """A webhook endpoint, owned by either a TC2 branch or a Bobbin organization.
+
+    A single table serves both products, discriminated by the required ``provider`` field:
+    - TC2:    ``provider='tutorcruncher'``, ``tc_id`` set,     ``org_id`` is the TC2 branch.
+    - Bobbin: ``provider='bobbin'``,        ``bobbin_id`` set, ``org_id`` is the Bobbin organization id.
+
+    Each ingest sets ``provider`` explicitly. Senders filter on it so a TC2 branch and a Bobbin org
+    that share an ``org_id`` integer never cross-deliver. ``(org_id, bobbin_id)`` is unique for Bobbin
+    rows; NULL ``bobbin_id`` lets many TC2 rows share an ``org_id``.
     """
 
+    __table_args__ = (UniqueConstraint('org_id', 'bobbin_id', name='uq_org_bobbin'),)
+
     id: Optional[int] = Field(default=None, primary_key=True)
-    tc_id: int = Field(unique=True)
+    provider: str  # required; a Provider value ('tutorcruncher' | 'bobbin')
+    tc_id: Optional[int] = Field(default=None, unique=True)  # set for TC2 endpoints
+    bobbin_id: Optional[int] = Field(default=None)  # bobbin-api WebhookEndpoint.id, set for Bobbin endpoints
     name: str
-    branch_id: int
+    org_id: int  # TC2 branch_id OR Bobbin organization_id, depending on provider
     webhook_url: str
     api_key: str
     active: bool

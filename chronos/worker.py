@@ -24,7 +24,7 @@ from sqlmodel import Session, select
 
 from chronos.db import engine
 from chronos.pydantic_schema import RequestData
-from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.queue import JobQueue
 from chronos.utils import app_logger, settings
 
@@ -88,14 +88,15 @@ async def webhook_request(
     *,
     body: bytes,
     webhook_sig: str,
+    user_agent: str,
 ):
     """
     Send a POST request to the webhook endpoint the user configured (their integration URL).
     The body must be the exact bytes that were used to compute webhook_sig so the receiver
-    can verify the HMAC.
+    can verify the HMAC. user_agent is the provider's User-Agent ('TutorCruncher' / 'Bobbin').
     """
     headers = {
-        'User-Agent': 'TutorCruncher',
+        'User-Agent': user_agent,
         'Content-Type': 'application/json',
         'webhook-signature': webhook_sig,
     }
@@ -121,6 +122,15 @@ async def webhook_request(
 
 acceptable_url_schemes = ('http', 'https', 'ftp', 'ftps')
 SUCCESS_STATUS_CODES = {200, 201, 202, 204}
+
+# User-Agent header sent per provider. Derived from the endpoint's provider at delivery time
+# (rather than passed around / defaulted) so retries and both ingest paths stay consistent.
+WEBHOOK_USER_AGENTS = {Provider.TC2: 'TutorCruncher', Provider.BOBBIN: 'Bobbin'}
+
+
+def _user_agent_for(provider: str) -> str:
+    """User-Agent header for an endpoint's provider."""
+    return WEBHOOK_USER_AGENTS[Provider(provider)]
 
 
 def _split_payloads(loaded_payload: dict) -> list[dict]:
@@ -223,13 +233,26 @@ def _get_endpoint_url(endpoint: WebhookEndpoint, url_extension: str | None) -> s
 
 
 async def _send_single_webhook(
-    client: AsyncClient, endpoint: WebhookEndpoint, payload_to_send: dict, url_extension: str | None
+    client: AsyncClient,
+    endpoint: WebhookEndpoint,
+    payload_to_send: dict,
+    url_extension: str | None,
 ) -> RequestData | None:
-    """Build a signed request and POST it. Returns None if the URL is invalid."""
+    """Build a signed request and POST it. Returns None if the URL is invalid.
+
+    Serves both TC2 and Bobbin sends; the User-Agent is derived from the endpoint's provider.
+    """
     url = _get_endpoint_url(endpoint, url_extension)
     if url:
         body, webhook_sig = _build_signed_request(endpoint, payload_to_send)
-        return await webhook_request(client, url, endpoint.id, body=body, webhook_sig=webhook_sig)
+        return await webhook_request(
+            client,
+            url,
+            endpoint.id,
+            body=body,
+            webhook_sig=webhook_sig,
+            user_agent=_user_agent_for(endpoint.provider),
+        )
 
 
 def _send_single_webhook_sync(
@@ -254,7 +277,7 @@ def _process_response(request_data: RequestData) -> tuple[WebhookLog, bool]:
     return _request_data_to_log(request_data), _is_retryable(request_data)
 
 
-async def _async_post_webhooks(endpoints, url_extension, payload):
+async def _async_post_webhooks(endpoints, url_extension, loaded_payload: dict):
     """Fan out a payload to all endpoints concurrently and return delivery results.
 
     Each multi-event payload is split into one request per event before sending
@@ -266,7 +289,6 @@ async def _async_post_webhooks(endpoints, url_extension, payload):
     total_success, total_failed = 0, 0
     retry_list = []  # (endpoint_id, payload_str, url_extension)
     limits = httpx.Limits(max_connections=settings.webhook_http_max_connections)
-    loaded_payload = json.loads(payload)
 
     async with AsyncClient(limits=limits) as client:
         coros = [
@@ -306,40 +328,47 @@ def _webhook_host_is_exempt_from_auto_disable(webhook_url: str) -> bool:
 
 
 def _notify_endpoint_disabled(
-    tc_id: int,
-    branch_id: int,
-    name: str,
-    webhook_url: str,
+    endpoint: WebhookEndpoint,
     failure_count: int,
     total_attempts: int,
     window_minutes: int,
 ) -> None:
-    """POST to TC2 when an endpoint is auto-disabled. Logs errors but does not raise."""
-    url = settings.tc2_endpoint_disabled_url
+    """POST to the endpoint's product when it is auto-disabled. Logs errors but does not raise.
+
+    The notify target and auth are per-provider: TC2 endpoints post to tc2_endpoint_disabled_url
+    (with its tc_id/branch_id contract); Bobbin endpoints post to bobbin_endpoint_disabled_url.
+    A provider without a configured URL is disabled silently.
+    """
+    if endpoint.provider == Provider.BOBBIN:
+        url = settings.bobbin_endpoint_disabled_url
+        shared_key = settings.bobbin_shared_key
+        payload = {'bobbin_id': endpoint.bobbin_id, 'org_id': endpoint.org_id}
+    else:
+        url = settings.tc2_endpoint_disabled_url
+        shared_key = settings.tc2_shared_key
+        payload = {'tc_id': endpoint.tc_id, 'branch_id': endpoint.org_id}
     if not url:
         return
-    payload = {
-        'tc_id': tc_id,
-        'branch_id': branch_id,
-        'name': name,
-        'webhook_url': webhook_url,
-        'failure_count': failure_count,
-        'total_attempts': total_attempts,
-        'window_minutes': window_minutes,
-        'reason': 'too_many_failures',
-    }
-    headers = {'Authorization': f'Bearer {settings.tc2_shared_key}', 'Content-Type': 'application/json'}
+    payload.update(
+        name=endpoint.name,
+        webhook_url=endpoint.webhook_url,
+        failure_count=failure_count,
+        total_attempts=total_attempts,
+        window_minutes=window_minutes,
+        reason='too_many_failures',
+    )
+    headers = {'Authorization': f'Bearer {shared_key}', 'Content-Type': 'application/json'}
     try:
         r = httpx.post(url, json=payload, headers=headers, timeout=10.0)
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
-        app_logger.warning('TC2 endpoint-disabled callback returned %s: %s', e.response.status_code, e.response.text)
+        app_logger.warning('Endpoint-disabled callback returned %s: %s', e.response.status_code, e.response.text)
     except Exception as e:
-        app_logger.exception('Failed to notify TC2 of disabled endpoint: %s', e)
+        app_logger.exception('Failed to notify %s of disabled endpoint: %s', endpoint.provider, e)
 
 
 def _check_and_disable_endpoint_if_needed(db: Session, endpoint: WebhookEndpoint) -> None:
-    """If endpoint has >threshold failure rate in the window with min attempts, set active=False and notify TC2."""
+    """If endpoint has >threshold failure rate in the window with min attempts, set active=False and notify."""
     if not endpoint.active:
         return
     if _webhook_host_is_exempt_from_auto_disable(endpoint.webhook_url):
@@ -367,19 +396,17 @@ def _check_and_disable_endpoint_if_needed(db: Session, endpoint: WebhookEndpoint
         return
     endpoint.active = False
     app_logger.info(
-        'Auto-disabled endpoint %s (tc_id=%s): failure rate %.1f%% (%s/%s) in last %s minutes',
+        'Auto-disabled %s endpoint %s (org_id=%s): failure rate %.1f%% (%s/%s) in last %s minutes',
+        endpoint.provider,
         endpoint.name,
-        endpoint.tc_id,
+        endpoint.org_id,
         failure_rate * 100,
         failures,
         total,
         settings.webhook_disable_failure_window_minutes,
     )
     _notify_endpoint_disabled(
-        endpoint.tc_id,
-        endpoint.branch_id,
-        endpoint.name,
-        endpoint.webhook_url,
+        endpoint,
         failure_count=failures,
         total_attempts=total,
         window_minutes=settings.webhook_disable_failure_window_minutes,
@@ -437,39 +464,54 @@ def task_retry_single_webhook(
             )
 
 
+def _resolve_send_target(loaded_payload: dict) -> tuple[Provider, int]:
+    """Work out provider and org_id from an inbound payload.
+
+    This is the only provider-specific step: the two products ship different ingest shapes
+    (Bobbin sends a single ``event_type`` + ``organization_id``; TC2 sends ``events`` /
+    ``branch_id``). Everything downstream is provider-agnostic.
+    """
+    if 'event_type' in loaded_payload:
+        return Provider.BOBBIN, loaded_payload['organization_id']
+    else:
+        events = loaded_payload.get('events')
+        org_id = events[0]['branch'] if events else loaded_payload['branch_id']
+        return Provider.TC2, org_id
+
+
 @celery_app.task(
     autoretry_for=(redis.exceptions.ConnectionError, redis.exceptions.TimeoutError),
     retry_kwargs={'max_retries': 3},
     retry_backoff=True,
 )
-def task_send_webhooks(payload: str, url_extension: str = None):
+def task_send_webhooks(payload: str | dict, url_extension: str = None):
     """
-    Send the webhook to the relevant endpoints
-    """
-    loaded_payload = json.loads(payload)
-    loaded_payload['_request_time'] = loaded_payload.pop('request_time')
+    Send the webhook to the relevant endpoints (TC2 or Bobbin — resolved from the payload shape).
 
-    if loaded_payload.get('events'):
-        branch_id = loaded_payload['events'][0]['branch']
-    else:
-        branch_id = loaded_payload['branch_id']
+    `payload` is the inbound webhook as a dict, or a JSON string (the round-robin dispatcher
+    serialises payloads to JSON when queueing them in Redis).
+    """
+    loaded_payload = json.loads(payload) if isinstance(payload, str) else payload
+    provider, org_id = _resolve_send_target(loaded_payload)
 
     qlength = job_queue.get_celery_queue_length()
     if qlength > settings.dispatcher_max_celery_queue:
         app_logger.error('Queue is too long, qlength=%s. Check workers and speeds.', qlength)
 
-    app_logger.info('Starting send webhook task for branch %s. qlength=%s.', branch_id, qlength)
-    lf_span = 'Sending webhooks for branch: {branch_id=}'
-    with logfire.span(lf_span, branch_id=branch_id):
+    app_logger.info('Starting send webhook task for %s org %s. qlength=%s.', provider, org_id, qlength)
+    with logfire.span('Sending webhooks for {provider=} {org_id=}', provider=provider, org_id=org_id):
         with Session(engine) as db:
-            # Get all the endpoints for the branch
+            # Endpoints for this org, scoped by provider so a TC2 branch and a Bobbin org that share
+            # an org_id integer never cross-deliver.
             endpoints_query = select(WebhookEndpoint).where(
-                WebhookEndpoint.branch_id == branch_id, WebhookEndpoint.active
+                WebhookEndpoint.org_id == org_id,
+                WebhookEndpoint.active,
+                WebhookEndpoint.provider == provider,
             )
             endpoints = db.exec(endpoints_query).all()
 
             webhook_logs, total_success, total_failed, retry_list = asyncio.run(
-                _async_post_webhooks(endpoints, url_extension, payload)
+                _async_post_webhooks(endpoints, url_extension, loaded_payload)
             )
             for webhook_log in webhook_logs:
                 db.add(webhook_log)
@@ -492,9 +534,10 @@ def task_send_webhooks(payload: str, url_extension: str = None):
                     _check_and_disable_endpoint_if_needed(db, endpoint)
             db.commit()
     app_logger.info(
-        '%s Webhooks sent for branch %s. Total Sent: %s. Total failed: %s',
+        '%s webhooks sent for %s org %s. Total Sent: %s. Total failed: %s',
         total_success + total_failed,
-        branch_id,
+        provider,
+        org_id,
         total_success,
         total_failed,
     )

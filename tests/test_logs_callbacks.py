@@ -135,6 +135,23 @@ def test_get_logs_none(session: Session, client: TestClient):
     }
 
 
+def test_get_logs_endpoint_not_found(session: Session, client: TestClient):
+    headers = _get_webhook_headers()
+    get_logs_url = app.url_path_for('get_logs', tc_id=99999, page=0)
+    r = client.get(get_logs_url, headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body['logs'] == []
+    assert body['count'] == 0
+    assert body['message'].startswith('WebhookEndpoint with TC ID: 99999 not found')
+
+
+def test_index(client: TestClient):
+    r = client.get(app.url_path_for('index'))
+    assert r.status_code == 200
+    assert r.json() == {'Live': True}
+
+
 def test_get_logs_one(session: Session, client: TestClient):
     eps = create_endpoint_from_dft_data()
     ep = eps[0]

@@ -11,7 +11,7 @@ from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from chronos.pydantic_schema import RequestData
-from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.utils import settings
 from chronos.worker import job_queue, task_retry_single_webhook, task_send_webhooks
@@ -33,9 +33,10 @@ def cleanup_retry_data(app_db: Session):
 
 def _create_endpoint(app_db: Session, branch_id: int = 99, active: bool = True, **kwargs) -> WebhookEndpoint:
     ep = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=kwargs.get('tc_id', 1),
         name=kwargs.get('name', 'retry-test'),
-        branch_id=branch_id,
+        org_id=branch_id,
         webhook_url=kwargs.get('webhook_url', 'https://retry-test.example.com/hook'),
         api_key=kwargs.get('api_key', 'secret'),
         active=active,
@@ -88,7 +89,7 @@ def test_retry_on_503_then_succeeds(client: TestClient, app_db: Session):
     )
 
     app_db.expire_all()
-    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id)).all()
+    logs = app_db.exec(select(WebhookLog).where(WebhookLog.webhook_endpoint_id == ep.id).order_by(WebhookLog.id)).all()
     assert len(logs) == 2
     assert logs[1].status == WebhookStatus.SUCCESS
     assert logs[1].status_code == 200

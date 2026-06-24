@@ -2,6 +2,8 @@ from typing import Any, Optional
 
 from pydantic import AliasChoices, BaseModel, Field
 
+from chronos.sql_models import Provider
+
 
 class TCIntegration(BaseModel):
     """
@@ -14,6 +16,18 @@ class TCIntegration(BaseModel):
     active: bool
     webhook_url: str
     api_key: str
+
+    def to_endpoint_fields(self) -> dict:
+        """Map the TC2 wire shape (branch_id) onto the shared WebhookEndpoint columns."""
+        return {
+            'provider': Provider.TC2,
+            'tc_id': self.tc_id,
+            'org_id': self.branch_id,
+            'name': self.name,
+            'active': self.active,
+            'webhook_url': self.webhook_url,
+            'api_key': self.api_key,
+        }
 
 
 class TCIntegrations(BaseModel):
@@ -65,17 +79,3 @@ class TCPublicProfileWebhook(BaseModel):
     created: Optional[str] = None
     release_timestamp: str
     request_time: Optional[int] = Field(validation_alias=AliasChoices('request_time', '_request_time'))
-
-
-class RequestData(BaseModel):
-    """
-    Pydantic model for the RequestData object
-    """
-
-    endpoint_id: int
-    request_headers: str
-    request_body: str
-    response_headers: str = '{"Message": "No response from endpoint"}'
-    response_body: str = '{"Message": "No response from endpoint"}'
-    status_code: int = 999
-    successful_response: str = False

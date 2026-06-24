@@ -87,7 +87,7 @@ def test_delete_endpoint(session: Session, client: TestClient):
 
     payload = get_dft_endpoint_deletion_data()
     headers = _get_webhook_headers()
-    with patch('chronos.views.task_delete_endpoint.delay') as mock_delay:
+    with patch('chronos.views.tutorcruncher.task_delete_endpoint.delay') as mock_delay:
         r = client.post(
             delete_url,
             data=json.dumps(payload),

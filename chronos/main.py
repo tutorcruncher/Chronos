@@ -10,7 +10,7 @@ from chronos.utils import settings as _app_settings
 
 init_sentry(for_celery_worker=False)
 
-from chronos.views import main_router  # noqa: E402
+from chronos.views import bobbin_router, main_router  # noqa: E402
 from chronos.worker import cronjob, lifespan  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,4 +38,5 @@ if bool(_app_settings.logfire_token):
 
     instrument_web_app(app)
 app.include_router(main_router, prefix='')
+app.include_router(bobbin_router, prefix='')
 app.include_router(cronjob, prefix='')

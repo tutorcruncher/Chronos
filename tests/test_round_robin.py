@@ -13,10 +13,10 @@ import respx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from chronos.sql_models import WebhookEndpoint, WebhookLog, WebhookStatus
+from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
 from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
-from chronos.views import _extract_branch_id
+from chronos.views.tutorcruncher import _extract_branch_id
 from chronos.worker import _async_post_webhooks, cache, dispatch_branch_task, job_queue, task_send_webhooks
 from tests.test_helpers import (
     _get_webhook_headers,
@@ -268,9 +268,10 @@ def test_job_dispatcher_task_smoke_dispatches_live_queued_job(session: Session, 
     from chronos.worker import job_dispatcher_task
 
     ep = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=650,
         name='dispatcher-smoke',
-        branch_id=99,
+        org_id=99,
         webhook_url='https://dispatcher-smoke.example.com/hook',
         api_key='dispatcher_secret',
         active=True,
@@ -337,15 +338,18 @@ def test_worker_ready_starts_dispatcher_only_on_dispatcher_queue():
 
 
 def test_task_send_webhooks_missing_request_time_behavior(session: Session, client: TestClient):
-    """API rejects missing request_time; task raises KeyError if it bypasses validation."""
+    """API rejects a payload missing request_time; the unified send task no longer depends on it.
+
+    The task resolves its target (provider/org) from the events themselves, so a payload missing
+    request_time runs as a no-op (no endpoints for the branch) rather than raising.
+    """
     headers = _get_webhook_headers()
     payload_no_request_time = {'events': REALISTIC_TC2_EVENTS}
 
     r = client.post(send_webhook_url, data=json.dumps(payload_no_request_time), headers=headers)
     assert r.status_code == 422
 
-    with pytest.raises(KeyError, match='request_time'):
-        task_send_webhooks(json.dumps(payload_no_request_time))
+    task_send_webhooks(json.dumps(payload_no_request_time))
 
 
 def test_task_send_webhooks_autoretry_config_is_set():
@@ -358,15 +362,16 @@ def test_task_send_webhooks_autoretry_config_is_set():
 def test_async_post_webhooks_empty_events_list():
     """events=[] produces zero outgoing requests even with active endpoints."""
     endpoint = WebhookEndpoint(
+        provider=Provider.TC2,
         id=1,
         tc_id=1,
         name='test-endpoint',
-        branch_id=3,
+        org_id=3,
         webhook_url='https://example.com/hook',
         api_key='secret',
         active=True,
     )
-    payload = json.dumps({'events': [], 'request_time': 1771509452})
+    payload = {'events': [], 'request_time': 1771509452}
 
     logs, success, failed, _ = asyncio.run(_async_post_webhooks([endpoint], None, payload))
 
@@ -378,29 +383,29 @@ def test_async_post_webhooks_empty_events_list():
 def test_async_post_webhooks_mixed_valid_invalid_endpoint_urls():
     """Invalid URL schemes are skipped; valid endpoints process all events."""
     valid_endpoint = WebhookEndpoint(
+        provider=Provider.TC2,
         id=1,
         tc_id=1,
         name='valid-hook',
-        branch_id=3,
+        org_id=3,
         webhook_url='https://valid.example.com/hook',
         api_key='key1',
         active=True,
     )
     invalid_endpoint = WebhookEndpoint(
+        provider=Provider.TC2,
         id=2,
         tc_id=2,
         name='invalid-hook',
-        branch_id=3,
+        org_id=3,
         webhook_url='foobar://not-a-real-url',
         api_key='key2',
         active=True,
     )
-    payload = json.dumps(
-        {
-            'events': REALISTIC_TC2_EVENTS,
-            'request_time': 1771509452,
-        }
-    )
+    payload = {
+        'events': REALISTIC_TC2_EVENTS,
+        'request_time': 1771509452,
+    }
 
     with respx.mock:
         respx.post('https://valid.example.com/hook').mock(return_value=httpx.Response(200))
@@ -591,17 +596,19 @@ def test_e2e_tc2_multi_event_webhook_splits_and_delivers(session: Session, clien
     from sqlalchemy import delete as sa_delete
 
     ep1 = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=501,
         name='alpha-hook',
-        branch_id=99,
+        org_id=99,
         webhook_url='https://alpha.example.com/hook',
         api_key='alpha_secret',
         active=True,
     )
     ep2 = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=502,
         name='beta-hook',
-        branch_id=99,
+        org_id=99,
         webhook_url='https://beta.example.com/hook',
         api_key='beta_secret',
         active=True,
@@ -734,9 +741,10 @@ def test_e2e_tc2_public_profile_webhook_no_split_with_url_extension(
 
     # -- Setup: one active endpoint for branch 99 --------------------------
     ep = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=601,
         name='profile-hook',
-        branch_id=99,
+        org_id=99,
         webhook_url='https://profile.example.com/hook',
         api_key='profile_secret',
         active=True,
@@ -834,25 +842,28 @@ def test_e2e_multi_tenant_isolation_no_cross_delivery(session: Session, client: 
     from sqlalchemy import delete as sa_delete
 
     ep_alpha = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=701,
         name='alpha-hook',
-        branch_id=99,
+        org_id=99,
         webhook_url='https://mt-alpha.example.com/hook',
         api_key='alpha_key',
         active=True,
     )
     ep_beta = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=702,
         name='beta-hook',
-        branch_id=99,
+        org_id=99,
         webhook_url='https://mt-beta.example.com/hook',
         api_key='beta_key',
         active=True,
     )
     ep_gamma = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=703,
         name='gamma-hook',
-        branch_id=199,
+        org_id=199,
         webhook_url='https://mt-gamma.example.com/hook',
         api_key='gamma_key',
         active=True,
@@ -1053,25 +1064,28 @@ def test_e2e_large_tenant_backlog_does_not_cross_tenant_delivery(session: Sessio
     from sqlalchemy import delete as sa_delete
 
     ep_alpha = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=801,
         name='alpha-hook',
-        branch_id=99,
+        org_id=99,
         webhook_url='https://lt-alpha.example.com/hook',
         api_key='alpha_key',
         active=True,
     )
     ep_beta = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=802,
         name='beta-hook',
-        branch_id=99,
+        org_id=99,
         webhook_url='https://lt-beta.example.com/hook',
         api_key='beta_key',
         active=True,
     )
     ep_gamma = WebhookEndpoint(
+        provider=Provider.TC2,
         tc_id=803,
         name='gamma-hook',
-        branch_id=199,
+        org_id=199,
         webhook_url='https://lt-gamma.example.com/hook',
         api_key='gamma_key',
         active=True,
