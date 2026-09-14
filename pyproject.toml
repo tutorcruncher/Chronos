@@ -4,32 +4,32 @@ version = "0.1.0"
 description = "Chronos webhook and job service"
 requires-python = ">=3.12"
 dependencies = [
-    "alembic>=1.18.4",
-    "apscheduler==3.11.2",
+    "alembic>=1.19.2",
+    "apscheduler==3.11.3",
     "celery==5.6.3",
-    "cryptography==48.0.0",
-    "fastapi==0.136.3",
+    "cryptography==50.0.1",
+    "fastapi==0.141.1",
     "fastapi_utilities==0.3.1",
     "httpx==0.28.1",
-    "logfire[fastapi,httpx,psycopg2,celery]==4.33.0",
-    "pillow==12.2.0",
-    "psycopg2-binary==2.9.12",
-    "pydantic==2.13.4",
-    "pydantic-settings==2.14.1",
-    "redis==7.4.0",
+    "logfire[fastapi,httpx,psycopg2,celery]==5.0.0",
+    "pillow==12.3.0",
+    "psycopg2-binary==2.9.13",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "redis==8.1.0",
     "requests==2.34.2",
     "respx==0.23.1",
-    "sentry-sdk==2.60.0",
-    "sqlmodel==0.0.38",
-    "uvicorn==0.48.0",
+    "sentry-sdk==2.69.1",
+    "sqlmodel==0.0.42",
+    "uvicorn==0.52.4",
 ]
 
 [dependency-groups]
 dev = [
-    "coverage==7.14.0",
-    "pytest==9.0.3",
+    "coverage==7.16.0",
+    "pytest==9.1.1",
     "pytest-cov==7.1.0",
-    "ruff==0.15.14",
+    "ruff==0.16.7",
 ]
 
 [tool.alembic]
