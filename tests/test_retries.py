@@ -336,17 +336,24 @@ def test_retry_countdown_values_match_backoff_formula(app_db: Session):
 
 
 @respx.mock
-def test_queue_too_long_warning(client: TestClient, app_db: Session):
-    """When Celery queue length exceeds threshold, app_logger.error is called."""
+def test_queue_too_long_error_only_above_alert_length(client: TestClient, app_db: Session) -> None:
+    """
+    The dispatcher holds the Celery queue around dispatcher_max_celery_queue during bursts, so only a queue past
+    celery_queue_alert_length logs an error.
+    """
     ep = _create_endpoint(app_db, tc_id=108)
     respx.post(ep.webhook_url).mock(return_value=httpx.Response(200))
-    payload = get_dft_webhook_data()
-    threshold = settings.dispatcher_max_celery_queue
+    payload = json.dumps(get_dft_webhook_data())
 
-    with patch.object(job_queue, 'get_celery_queue_length', return_value=threshold + 50):
+    with patch.object(job_queue, 'get_celery_queue_length', return_value=settings.dispatcher_max_celery_queue + 50):
         with patch('chronos.worker.app_logger') as mock_logger:
-            task_send_webhooks(payload=json.dumps(payload), url_extension=None)
-    mock_logger.error.assert_called_once()
-    call_args = mock_logger.error.call_args[0]
-    assert 'Queue is too long' in call_args[0]
-    assert call_args[1] == threshold + 50
+            task_send_webhooks(payload=payload, url_extension=None)
+    mock_logger.error.assert_not_called()
+
+    alert_length = settings.celery_queue_alert_length
+    with patch.object(job_queue, 'get_celery_queue_length', return_value=alert_length + 1):
+        with patch('chronos.worker.app_logger') as mock_logger:
+            task_send_webhooks(payload=payload, url_extension=None)
+    mock_logger.error.assert_called_once_with(
+        'Queue is too long, qlength=%s. Check workers and speeds.', alert_length + 1
+    )

@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -14,10 +15,18 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
-from chronos.tasks.dispatcher import dispatch_cycle
+from chronos.tasks.dispatcher import check_job_wait, dispatch_cycle
 from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
+from chronos.utils import settings
 from chronos.views.tutorcruncher import _extract_branch_id
-from chronos.worker import _async_post_webhooks, cache, dispatch_branch_task, job_queue, task_send_webhooks
+from chronos.worker import (
+    _async_post_webhooks,
+    cache,
+    dispatch_branch_task,
+    job_dispatcher_task,
+    job_queue,
+    task_send_webhooks,
+)
 from tests.test_helpers import (
     _get_webhook_headers,
     get_dft_con_webhook_data,
@@ -238,7 +247,7 @@ def test_job_dispatcher_task_catches_generic_exception_and_keeps_running():
 
     call_count = 0
 
-    def dispatch_side_effect():
+    def dispatch_side_effect(batch_limit: int):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -542,6 +551,85 @@ def test_job_dispatcher_task_dispatches_and_logs(mock_apply):
 
     mock_apply.assert_called_once()
     assert mock_span.message == 'Dispatched 1 jobs'
+
+
+def test_job_dispatcher_task_only_fills_remaining_headroom() -> None:
+    """A cycle never dispatches more than the space left under the Celery queue ceiling."""
+    with (
+        patch.object(job_queue, 'has_active_jobs', return_value=True),
+        patch.object(job_queue, 'get_celery_queue_length', return_value=97),
+        patch('chronos.tasks.dispatcher.dispatch_cycle', return_value=0) as mock_dispatch,
+        patch('time.sleep', side_effect=SystemExit),
+    ):
+        with pytest.raises(SystemExit):
+            job_dispatcher_task(max_celery_queue=100, batch_limit=100)
+
+    mock_dispatch.assert_called_once_with(batch_limit=3)
+
+
+def test_job_dispatcher_task_checks_job_wait_once_per_interval() -> None:
+    """The wait check runs even while backpressure pauses dispatch, and at most once per interval."""
+    sleep_calls = []
+
+    def sleep_side_effect(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        if len(sleep_calls) >= 3:
+            raise SystemExit
+
+    with (
+        patch.object(job_queue, 'has_active_jobs', return_value=True),
+        patch.object(job_queue, 'get_celery_queue_length', return_value=100),
+        patch('chronos.tasks.dispatcher.check_job_wait') as mock_check,
+        patch('chronos.tasks.dispatcher.dispatch_cycle') as mock_dispatch,
+        patch('time.sleep', side_effect=sleep_side_effect),
+    ):
+        with pytest.raises(SystemExit):
+            job_dispatcher_task(max_celery_queue=100)
+
+    mock_dispatch.assert_not_called()
+    mock_check.assert_called_once()
+
+
+def _enqueue_job_with_age(branch_id: int, age: timedelta) -> None:
+    """Enqueue a job as if it had been enqueued `age` ago."""
+    with patch('chronos.tasks.queue.datetime') as mock_datetime:
+        mock_datetime.now.return_value = datetime.now(UTC) - age
+        job_queue.enqueue(task_send_webhooks.name, branch_id=branch_id, payload='p')
+
+
+def test_check_job_wait_logs_oldest_late_job() -> None:
+    """The error names the branch with the oldest job; empty and poison branches are skipped."""
+    max_wait = settings.dispatcher_max_job_wait_seconds
+    _enqueue_job_with_age(10, timedelta(seconds=1))
+    _enqueue_job_with_age(20, timedelta(seconds=max_wait + 60))
+    _enqueue_job_with_age(30, timedelta(seconds=max_wait + 120))
+    cache.rpush(BRANCH_KEY_TEMPLATE.format(40), 'not valid json{{{')
+    cache.sadd(ACTIVE_BRANCHES_KEY, '40', '50')
+
+    with patch('chronos.tasks.dispatcher.dispatch_logger') as mock_logger:
+        check_job_wait()
+
+    mock_logger.error.assert_called_once()
+    log_args = mock_logger.error.call_args[0]
+    assert 'has waited' in log_args[0]
+    assert log_args[1] == 30
+    assert log_args[2] >= max_wait + 120
+
+
+def test_check_job_wait_no_error_for_recent_jobs() -> None:
+    _enqueue_job_with_age(10, timedelta(seconds=1))
+
+    with patch('chronos.tasks.dispatcher.dispatch_logger') as mock_logger:
+        check_job_wait()
+
+    mock_logger.error.assert_not_called()
+
+
+def test_check_job_wait_no_jobs() -> None:
+    with patch('chronos.tasks.dispatcher.dispatch_logger') as mock_logger:
+        check_job_wait()
+
+    mock_logger.error.assert_not_called()
 
 
 def test_job_dispatcher_task_dispatch_cycle_returns_zero():
