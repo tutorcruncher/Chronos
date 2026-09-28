@@ -139,12 +139,35 @@ def dispatch_cycle(batch_limit: int = settings.dispatcher_batch_limit):
         dispatched += 1
         dispatch_logger.info('Dispatched %s for branch %d', payload.task_name, branch_id)
 
-        # Queue length alone is expected to sit at the backpressure ceiling during bursts; how long
-        # a job waited is what tells us webhooks are reaching customers late.
-        wait_seconds = (datetime.now(UTC) - payload.enqueued_at).total_seconds()
-        if wait_seconds > settings.dispatcher_max_job_wait_seconds:
-            dispatch_logger.error(
-                'Job for branch %d waited %ds before dispatch. Check workers and speeds.', branch_id, wait_seconds
-            )
-
     return dispatched
+
+
+def check_job_wait() -> None:
+    """
+    Log an error if the oldest job in the branch queues has waited longer than dispatcher_max_job_wait_seconds.
+
+    The Celery queue is expected to sit at the backpressure ceiling during bursts, so its length says little; how long
+    a job has waited is what tells us webhooks are reaching customers late. Each branch queue is FIFO, so its head is
+    its oldest job.
+    """
+    # avoids circular import here
+    from chronos.worker import job_queue
+
+    heads = []
+    for branch_id in job_queue.get_active_branches():
+        try:
+            payload = job_queue.peek(branch_id)
+        except (json.JSONDecodeError, ValidationError):
+            # dispatch_cycle discards poison payloads
+            continue
+        if payload:
+            heads.append((payload.enqueued_at, branch_id))
+    if not heads:
+        return
+
+    oldest_enqueued_at, branch_id = min(heads)
+    wait_seconds = (datetime.now(UTC) - oldest_enqueued_at).total_seconds()
+    if wait_seconds > settings.dispatcher_max_job_wait_seconds:
+        dispatch_logger.error(
+            'Oldest queued job (branch %d) has waited %ds. Check workers and speeds.', branch_id, wait_seconds
+        )

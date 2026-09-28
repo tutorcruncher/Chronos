@@ -47,8 +47,13 @@ class Settings(BaseSettings):
     dispatcher_cycle_delay_seconds: float = 0.01
     # Sleep duration when no active branches have queued jobs.
     dispatcher_idle_delay_seconds: float = 1.0
-    # A job that sat in its branch queue longer than this before dispatch logs an error.
+    # The dispatcher logs an error (checked at most once a minute) when the oldest job in the branch queues has
+    # waited longer than this.
     dispatcher_max_job_wait_seconds: int = 300
+    # A send task logs an error when the broker queue is longer than this. Kept well above
+    # dispatcher_max_celery_queue, which the dispatcher holds the queue at during bursts, so it only catches
+    # backlogs from producers that bypass the dispatcher (Bobbin, use_round_robin=False, retries).
+    celery_queue_alert_length: int = 1000
 
     # Webhook HTTP client tuning
 

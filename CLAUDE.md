@@ -76,9 +76,9 @@ Schema is managed with **Alembic**. There is no `alembic.ini` — config lives i
   - `enqueue(task_name, branch_id, **kwargs)` pushes a `JobPayload` (task_name, branch_id, kwargs, enqueued_at, trace_context) and adds branch to the set.
   - `peek(branch_id)`, `ack(branch_id)`, `get_active_branches()`, `get_cursor()` / `set_cursor()`, `get_celery_queue_length()` (length of Redis list `celery`).
 
-- **`chronos/tasks/dispatcher.py`**: `dispatch_cycle(batch_limit)` runs one round: get active branches, rotate by cursor (bisect_right), for each branch peek → validate → `task.apply_async(kwargs)` → ack → set cursor, until batch_limit or no more branches. Poison payloads (e.g. invalid JSON) are acked and skipped. Trace context is restored when dispatching. After dispatch, if the job waited longer than `dispatcher_max_job_wait_seconds` since `JobPayload.enqueued_at`, it logs an error — this is the "webhooks are late" alert (the Celery queue length is expected to sit at the ceiling during bursts, so it isn't alerted on).
+- **`chronos/tasks/dispatcher.py`**: `dispatch_cycle(batch_limit)` runs one round: get active branches, rotate by cursor (bisect_right), for each branch peek → validate → `task.apply_async(kwargs)` → ack → set cursor, until batch_limit or no more branches. Poison payloads (e.g. invalid JSON) are acked and skipped. Trace context is restored when dispatching. `check_job_wait()` peeks every branch's head job and logs an error if the oldest `JobPayload.enqueued_at` is older than `dispatcher_max_job_wait_seconds` — the "round-robin webhooks are late" alert.
 
-- **`chronos/worker.py`**: `job_dispatcher_task` runs in a loop: if no active jobs, sleep idle_delay; if Celery queue length ≥ `dispatcher_max_celery_queue`, sleep cycle_delay; else run `dispatch_cycle()` with `batch_limit` capped to the headroom left under `dispatcher_max_celery_queue` (so a cycle can't overshoot the ceiling), then sleep cycle_delay. Uses `acks_late=False` so the broker doesn't redeliver this never-ending task.
+- **`chronos/worker.py`**: `job_dispatcher_task` runs in a loop: if no active jobs, sleep idle_delay; if Celery queue length ≥ `dispatcher_max_celery_queue`, sleep cycle_delay; else run `dispatch_cycle()` with `batch_limit` capped to the headroom left under `dispatcher_max_celery_queue` (so a cycle can't overshoot the ceiling), then sleep cycle_delay. While there are active jobs it also calls `check_job_wait()` at most once every `JOB_WAIT_CHECK_INTERVAL_SECONDS` (60s), before the backpressure check so stalled workers still alert. Uses `acks_late=False` so the broker doesn't redeliver this never-ending task.
 
 - **`chronos/tasks/worker_startup.py`**: On `worker_ready`, if the worker consumes the `dispatcher` queue, it starts `job_dispatcher_task.apply_async(countdown=60)`.
 
@@ -92,7 +92,7 @@ Dispatcher must be run with `--soft-time-limit=0 --time-limit=0` so it never tim
 - **Databases**: `pg_dsn`, `test_pg_dsn`, `redis_url`.
 - **Auth**: `tc2_shared_key` (Bearer token for TC).
 - **Observability**: `logfire_token`, `sentry_dsn`.
-- **Round-robin**: `use_round_robin`; `dispatcher_max_celery_queue`, `dispatcher_batch_limit`, `dispatcher_cycle_delay_seconds`, `dispatcher_idle_delay_seconds`, `dispatcher_max_job_wait_seconds`.
+- **Round-robin**: `use_round_robin`; `dispatcher_max_celery_queue`, `dispatcher_batch_limit`, `dispatcher_cycle_delay_seconds`, `dispatcher_idle_delay_seconds`, `dispatcher_max_job_wait_seconds`. `celery_queue_alert_length` (1000): `task_send_webhooks` logs "Queue is too long" above this. It is kept well above `dispatcher_max_celery_queue` (which the dispatcher holds the queue at during bursts) so it only catches backlogs from producers that bypass the dispatcher (Bobbin, `use_round_robin=False`, retries).
 - **HTTP client**: `webhook_http_timeout_seconds`, `webhook_http_max_connections`.
 
 CORS: in production, origins are beta or secure TutorCruncher; in `dev_mode`, `*`.

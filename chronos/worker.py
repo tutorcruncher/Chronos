@@ -495,6 +495,9 @@ def task_send_webhooks(payload: str | dict, url_extension: str = None):
     provider, org_id = _resolve_send_target(loaded_payload)
 
     qlength = job_queue.get_celery_queue_length()
+    if qlength > settings.celery_queue_alert_length:
+        app_logger.error('Queue is too long, qlength=%s. Check workers and speeds.', qlength)
+
     app_logger.info('Starting send webhook task for %s org %s. qlength=%s.', provider, org_id, qlength)
     with logfire.span('Sending webhooks for {provider=} {org_id=}', provider=provider, org_id=org_id):
         with Session(engine) as db:
@@ -657,11 +660,15 @@ def dispatch_branch_task(task, branch_id: int, **kwargs) -> None:
         )
 
 
+JOB_WAIT_CHECK_INTERVAL_SECONDS = 60
+
+
 @celery_app.task(name='job_dispatcher', acks_late=False, trail=False)
 def job_dispatcher_task(
     max_celery_queue: int = settings.dispatcher_max_celery_queue,
     cycle_delay: float = settings.dispatcher_cycle_delay_seconds,  # at most the webhooks need to wait for 10ms
     idle_delay: float = settings.dispatcher_idle_delay_seconds,  # this is for when no active branches, so doesn't need to be as frequent
+    batch_limit: int = settings.dispatcher_batch_limit,
 ) -> None:
     """
     Celery task that runs round robin dispatcher.
@@ -683,14 +690,21 @@ def job_dispatcher_task(
     """
     from billiard.exceptions import SoftTimeLimitExceeded
 
-    from chronos.tasks.dispatcher import dispatch_cycle
+    from chronos.tasks.dispatcher import check_job_wait, dispatch_cycle
 
     app_logger.info('Job dispatcher started')
+    last_wait_check = 0.0
     while True:
         try:
             if not job_queue.has_active_jobs():
                 time.sleep(idle_delay)
                 continue
+
+            # Checked before backpressure so jobs piling up behind stalled workers still alert, and on an
+            # interval so a long backlog logs one error a minute rather than one per job.
+            if time.monotonic() - last_wait_check >= JOB_WAIT_CHECK_INTERVAL_SECONDS:
+                last_wait_check = time.monotonic()
+                check_job_wait()
 
             # LLEN celery: measures pending broker queue only, not in-flight tasks.
             celery_queue_len = job_queue.get_celery_queue_length()
@@ -704,8 +718,7 @@ def job_dispatcher_task(
             try:
                 with logfire.span('Dispatching jobs') as span:
                     # Only fill the headroom left, otherwise one cycle can push the queue to ~2x the ceiling.
-                    batch_limit = min(settings.dispatcher_batch_limit, max_celery_queue - celery_queue_len)
-                    dispatched = dispatch_cycle(batch_limit=batch_limit)
+                    dispatched = dispatch_cycle(batch_limit=min(batch_limit, max_celery_queue - celery_queue_len))
                     if dispatched > 0:
                         # without this gaurd the cycle will log every 10ms it finds nothing
                         # in the dispatcher queue which can be noisy
