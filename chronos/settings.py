@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     dispatcher_cycle_delay_seconds: float = 0.01
     # Sleep duration when no active branches have queued jobs.
     dispatcher_idle_delay_seconds: float = 1.0
+    # A job that sat in its branch queue longer than this before dispatch logs an error.
+    dispatcher_max_job_wait_seconds: int = 300
 
     # Webhook HTTP client tuning
 

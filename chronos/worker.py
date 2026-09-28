@@ -495,9 +495,6 @@ def task_send_webhooks(payload: str | dict, url_extension: str = None):
     provider, org_id = _resolve_send_target(loaded_payload)
 
     qlength = job_queue.get_celery_queue_length()
-    if qlength > settings.dispatcher_max_celery_queue:
-        app_logger.error('Queue is too long, qlength=%s. Check workers and speeds.', qlength)
-
     app_logger.info('Starting send webhook task for %s org %s. qlength=%s.', provider, org_id, qlength)
     with logfire.span('Sending webhooks for {provider=} {org_id=}', provider=provider, org_id=org_id):
         with Session(engine) as db:
@@ -706,7 +703,9 @@ def job_dispatcher_task(
             cycle_token = otel_context.attach(otel_context.Context())
             try:
                 with logfire.span('Dispatching jobs') as span:
-                    dispatched = dispatch_cycle()
+                    # Only fill the headroom left, otherwise one cycle can push the queue to ~2x the ceiling.
+                    batch_limit = min(settings.dispatcher_batch_limit, max_celery_queue - celery_queue_len)
+                    dispatched = dispatch_cycle(batch_limit=batch_limit)
                     if dispatched > 0:
                         # without this gaurd the cycle will log every 10ms it finds nothing
                         # in the dispatcher queue which can be noisy

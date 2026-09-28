@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -15,7 +16,8 @@ from sqlmodel import Session, select
 
 from chronos.sql_models import Provider, WebhookEndpoint, WebhookLog, WebhookStatus
 from chronos.tasks.dispatcher import dispatch_cycle
-from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobQueue
+from chronos.tasks.queue import ACTIVE_BRANCHES_KEY, BRANCH_KEY_TEMPLATE, JobPayload, JobQueue
+from chronos.utils import settings
 from chronos.views.tutorcruncher import _extract_branch_id
 from chronos.worker import _async_post_webhooks, cache, dispatch_branch_task, job_queue, task_send_webhooks
 from tests.test_helpers import (
@@ -238,7 +240,7 @@ def test_job_dispatcher_task_catches_generic_exception_and_keeps_running():
 
     call_count = 0
 
-    def dispatch_side_effect():
+    def dispatch_side_effect(batch_limit: int):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -542,6 +544,63 @@ def test_job_dispatcher_task_dispatches_and_logs(mock_apply):
 
     mock_apply.assert_called_once()
     assert mock_span.message == 'Dispatched 1 jobs'
+
+
+def test_job_dispatcher_task_only_fills_remaining_headroom():
+    """A cycle never dispatches more than the space left under the Celery queue ceiling."""
+    from chronos.worker import job_dispatcher_task
+
+    with (
+        patch.object(job_queue, 'has_active_jobs', return_value=True),
+        patch.object(job_queue, 'get_celery_queue_length', return_value=settings.dispatcher_max_celery_queue - 3),
+        patch('chronos.tasks.dispatcher.dispatch_cycle', return_value=0) as mock_dispatch,
+        patch('time.sleep', side_effect=SystemExit),
+    ):
+        with pytest.raises(SystemExit):
+            job_dispatcher_task()
+
+    mock_dispatch.assert_called_once_with(batch_limit=3)
+
+
+def _enqueue_job_with_age(branch_id: int, age: timedelta) -> None:
+    """Push a job onto a branch queue as if it had been enqueued `age` ago."""
+    payload = JobPayload(
+        task_name=task_send_webhooks.name,
+        branch_id=branch_id,
+        kwargs={'payload': 'p'},
+        enqueued_at=datetime.now(UTC) - age,
+    )
+    cache.rpush(BRANCH_KEY_TEMPLATE.format(branch_id), payload.model_dump_json())
+    cache.sadd(ACTIVE_BRANCHES_KEY, str(branch_id))
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_dispatch_cycle_logs_error_when_job_waited_too_long(mock_apply):
+    """A job that waited past dispatcher_max_job_wait_seconds is still dispatched but logs an error."""
+    _enqueue_job_with_age(42, timedelta(seconds=settings.dispatcher_max_job_wait_seconds + 60))
+
+    with patch('chronos.tasks.dispatcher.dispatch_logger') as mock_logger:
+        dispatched = dispatch_cycle()
+
+    assert dispatched == 1
+    mock_apply.assert_called_once()
+    mock_logger.error.assert_called_once()
+    log_args = mock_logger.error.call_args[0]
+    assert 'waited' in log_args[0]
+    assert log_args[1] == 42
+    assert log_args[2] >= settings.dispatcher_max_job_wait_seconds + 60
+
+
+@patch.object(task_send_webhooks, 'apply_async')
+def test_dispatch_cycle_no_error_for_recent_job(mock_apply):
+    """A job dispatched within dispatcher_max_job_wait_seconds does not log an error."""
+    _enqueue_job_with_age(42, timedelta(seconds=1))
+
+    with patch('chronos.tasks.dispatcher.dispatch_logger') as mock_logger:
+        dispatched = dispatch_cycle()
+
+    assert dispatched == 1
+    mock_logger.error.assert_not_called()
 
 
 def test_job_dispatcher_task_dispatch_cycle_returns_zero():

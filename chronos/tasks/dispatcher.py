@@ -22,6 +22,7 @@ celery -A chronos.worker worker -Q dispatcher -c 1 \
 import json
 import logging
 from bisect import bisect_right
+from datetime import UTC, datetime
 
 from opentelemetry import context as otel_context
 from opentelemetry.propagate import extract
@@ -137,5 +138,13 @@ def dispatch_cycle(batch_limit: int = settings.dispatcher_batch_limit):
             dispatch_logger.exception('Failed to update cursor after dispatching for branch %d', branch_id)
         dispatched += 1
         dispatch_logger.info('Dispatched %s for branch %d', payload.task_name, branch_id)
+
+        # Queue length alone is expected to sit at the backpressure ceiling during bursts; how long
+        # a job waited is what tells us webhooks are reaching customers late.
+        wait_seconds = (datetime.now(UTC) - payload.enqueued_at).total_seconds()
+        if wait_seconds > settings.dispatcher_max_job_wait_seconds:
+            dispatch_logger.error(
+                'Job for branch %d waited %ds before dispatch. Check workers and speeds.', branch_id, wait_seconds
+            )
 
     return dispatched
